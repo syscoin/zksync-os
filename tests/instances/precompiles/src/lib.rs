@@ -3,17 +3,16 @@
 
 use rig::alloy::consensus::TxLegacy;
 use rig::utils::{calldata_for_forwarder, FORWARDER_BYTECODE};
-use rig::zksync_os_interface::types::BlockOutput;
 use rig::zksync_os_interface::types::ExecutionResult::Revert;
-use rig::BlockContext;
 use rig::{
     alloy::{
-        primitives::{address, Address, TxKind},
+        primitives::{address, keccak256, Address, TxKind},
         rpc::types::TransactionRequest,
     },
     ruint::aliases::U256,
     TestingFramework,
 };
+use rig::{BlockContext, BlockOutput};
 use std::assert_matches::assert_matches;
 use zksync_os_tests_common::zksync_tx::ZKsyncTxEnvelope;
 
@@ -84,6 +83,167 @@ fn run_precompile_inner(
 
 fn run_precompile(precompile_id: &str, gas: Option<u64>, input: &[u8]) -> BlockOutput {
     run_precompile_inner(precompile_id, gas, input, false)
+}
+
+// SYSCOIN: keep the 0x101 integration vector out of the already-large inline
+// precompile table. This legacy acceptance signature is copied from:
+// `contracts/test/vectors/slh_dsa_sha2_128_24_kat.json`, introduced by commit
+// 6b43ab88a6e3851f45529e89d23670d0fc0c324b. Its original JSON SHA-256 was
+// 859639cf4c2c1d508a95556923791610e9c1f957438703526928cdf07674bdb9;
+// the provenance-annotated corpus JSON is ba33ddf2addd6393e727b2c299e10ec2b551bfaf3dc7fe23373e7df00dfa6385.
+const SLH_DSA_SHA2_128_24_PRECOMPILE: &str = "0000000000000000000000000000000000000101";
+const SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE: &str =
+    include_str!("../fixtures/slh_dsa_sha2_128_24_valid.sig.hex");
+const SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE_SHA256: &str =
+    "39aa2b5f6544bd143881b07920be7f030d4018d82f95b32d38f366d96102b02c";
+const SLH_DSA_SHA2_128_24_LEGACY_INPUT_SHA256: &str =
+    "eb9bfc260ad0f03e04a313f2bee122bcde1434365110253bfae0652281ba6139";
+// SYSCOIN: reproducible counter-0 vector generated from the exact SP 800-230
+// IPD tuple and independently accepted by pinned pq-code-package/slhdsa-c.
+// SHA-256(source JSON) =
+// 133fe2a7f6a4218286ac501da8c2b875423510d7717606bba948ffc9219a2272.
+const SLH_DSA_SHA2_128_24_IPD_COUNTER0_SIGNATURE: &str =
+    include_str!("../fixtures/slh_dsa_sha2_128_24_sp800_230_ipd_counter0.sig.hex");
+const SLH_DSA_SHA2_128_24_IPD_COUNTER0_SIGNATURE_SHA256: &str =
+    "4120ddc01b07ed53ce966bcca6b7e2c7c95144df39c969b1d3b25ad59caa0d88";
+const SLH_DSA_SHA2_128_24_IPD_COUNTER0_INPUT_SHA256: &str =
+    "3e71a937be70dac6e9d4791a7ef932ad57b742e41247d0d1da4b8f4a8ec3c17f";
+
+fn checked_slh_dsa_sha2_128_24_input(
+    signature_hex: &str,
+    signature_sha256: &str,
+    pk_seed_word_hex: &str,
+    pk_root_word_hex: &str,
+    message_hex: &str,
+    input_sha256: &str,
+    label: &str,
+) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+
+    let signature = hex::decode(
+        signature_hex
+            .trim()
+            .strip_prefix("0x")
+            .expect("checked signature fixture must retain its 0x prefix"),
+    )
+    .expect("checked signature fixture must contain lowercase hex");
+    assert_eq!(signature.len(), 3856);
+    assert_eq!(
+        hex::encode(Sha256::digest(&signature)),
+        signature_sha256,
+        "SLH-DSA {label} signature fixture changed"
+    );
+
+    let mut input = Vec::with_capacity(3952);
+    input.extend(hex::decode(pk_seed_word_hex).expect("valid checked pkSeed word"));
+    input.extend(hex::decode(pk_root_word_hex).expect("valid checked pkRoot word"));
+    input.extend(hex::decode(message_hex).expect("valid checked message"));
+    input.extend(signature);
+    assert_eq!(input.len(), 3952);
+    assert_eq!(
+        hex::encode(Sha256::digest(&input)),
+        input_sha256,
+        "SLH-DSA 0x101 {label} input changed"
+    );
+    input
+}
+
+fn slh_dsa_sha2_128_24_legacy_input() -> Vec<u8> {
+    checked_slh_dsa_sha2_128_24_input(
+        SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE,
+        SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE_SHA256,
+        "9af9a6d986bc7450f99c34e8aca453c800000000000000000000000000000000",
+        "37b5d97afcfbd8118e75e50aba480a9e00000000000000000000000000000000",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        SLH_DSA_SHA2_128_24_LEGACY_INPUT_SHA256,
+        "legacy acceptance vector",
+    )
+}
+
+fn slh_dsa_sha2_128_24_ipd_counter0_input() -> Vec<u8> {
+    checked_slh_dsa_sha2_128_24_input(
+        SLH_DSA_SHA2_128_24_IPD_COUNTER0_SIGNATURE,
+        SLH_DSA_SHA2_128_24_IPD_COUNTER0_SIGNATURE_SHA256,
+        "750e7b30f37700dd14b20a5c647bb93600000000000000000000000000000000",
+        "3456300211d2a77c26a60804b918738f00000000000000000000000000000000",
+        "c1fd5ba4e304827439265a094a8b82f005662dce23be909f9e179cbce73b5f5d",
+        SLH_DSA_SHA2_128_24_IPD_COUNTER0_INPUT_SHA256,
+        "SP 800-230 IPD counter-0 vector",
+    )
+}
+
+fn assert_slh_dsa_sha2_128_24_routes(input: &[u8], expected: &[u8]) {
+    // SYSCOIN: REVM does not know the Syscoin-only 0x101 hook. The OS run
+    // still executes both a direct call and a call through the forwarder.
+    let output = run_precompile_inner(SLH_DSA_SHA2_128_24_PRECOMPILE, None, input, true);
+    let mut results = output.tx_results.into_iter();
+    let direct = results
+        .next()
+        .expect("direct 0x101 transaction is present")
+        .expect("direct 0x101 call succeeds");
+    let forwarded = results
+        .next()
+        .expect("forwarded 0x101 transaction is present")
+        .expect("forwarded 0x101 call succeeds");
+    assert!(results.next().is_none());
+    assert_eq!(direct.as_returned_bytes(), expected, "direct 0x101 output");
+
+    // `call_and_store` ABI-encodes `(success, return_data, return_data_hash)`.
+    // Validate the complete envelope rather than merely searching for the
+    // expected word, so the forwarded path proves a successful 0x101 call.
+    let returned = forwarded.as_returned_bytes();
+    assert_eq!(returned.len(), 160, "forwarded 0x101 ABI length");
+    assert_eq!(U256::from_be_slice(&returned[0..32]), U256::ONE);
+    assert_eq!(U256::from_be_slice(&returned[32..64]), U256::from(96));
+    assert_eq!(&returned[64..96], keccak256(expected).as_slice());
+    assert_eq!(U256::from_be_slice(&returned[96..128]), U256::from(32));
+    assert_eq!(&returned[128..160], expected, "forwarded 0x101 output");
+}
+
+#[test]
+fn test_syscoin_slh_dsa_sha2_128_24_precompile_conformance_routing() {
+    let mut expected = [0u8; 32];
+    expected[31] = 1;
+    // SYSCOIN: retain the historical accepted signature and require the exact
+    // reproducible IPD counter-0 vector on both direct and forwarded routes.
+    assert_slh_dsa_sha2_128_24_routes(&slh_dsa_sha2_128_24_legacy_input(), &expected);
+    assert_slh_dsa_sha2_128_24_routes(&slh_dsa_sha2_128_24_ipd_counter0_input(), &expected);
+}
+
+#[test]
+fn test_syscoin_slh_dsa_sha2_128_24_precompile_malformed_input() {
+    // SYSCOIN: malformed ABI input is a canonical false result, not a panic
+    // or revert, and both address-routing paths must agree.
+    assert_slh_dsa_sha2_128_24_routes(&[0x42; 3], &[0u8; 32]);
+}
+
+#[test]
+fn test_syscoin_slh_dsa_sha2_128_24_precompile_insufficient_gas() {
+    // SYSCOIN: after intrinsic gas, 65k cannot cover the fixed 45k precompile
+    // charge. Exercise both the direct hook and the forwarder route.
+    let output = run_precompile_inner(
+        SLH_DSA_SHA2_128_24_PRECOMPILE,
+        Some(65_000),
+        &[0x42; 3],
+        true,
+    );
+    assert_eq!(output.tx_results.len(), 2);
+    for result in output.tx_results {
+        let result = result.expect("out-of-gas transaction must be represented");
+        assert_matches!(result.execution_result, Revert(..));
+        assert_eq!(result.gas_used, 65_000);
+    }
+}
+
+#[test]
+#[ignore = "Requires max emulator cycle limit"]
+fn bench_syscoin_slh_dsa_sha2_128_24_verify() {
+    // SYSCOIN: build the old and delegated OS variants with cycle markers and
+    // run this reproducible IPD input for directly comparable measurements.
+    cycle_marker::log_marker("Params: sp800_230_ipd_counter0:1");
+    let mut expected = [0u8; 32];
+    expected[31] = 1;
+    assert_slh_dsa_sha2_128_24_routes(&slh_dsa_sha2_128_24_ipd_counter0_input(), &expected);
 }
 
 struct Test {

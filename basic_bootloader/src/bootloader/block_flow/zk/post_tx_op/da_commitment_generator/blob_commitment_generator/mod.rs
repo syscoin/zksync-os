@@ -3,13 +3,7 @@ use self::commitment_and_proof_advice::{
 };
 use super::DACommitmentGenerator;
 use arrayvec::ArrayVec;
-use basic_system::system_functions::point_evaluation::{
-    parse_g1_compressed, versioned_hash_for_kzg,
-};
-use crypto::ark_ff::Field;
-use crypto::ark_ff::One;
-use crypto::ark_ff::PrimeField;
-use crypto::ark_ff::Zero;
+use crypto::ark_ff::{Field, One, PrimeField, Zero};
 use crypto::sha3::Keccak256;
 use crypto::{parse_u256_be, MiniDigest};
 use zk_ee::oracle::IOOracle;
@@ -33,21 +27,24 @@ pub const ELEMENTS_PER_4844_BLOB: usize = 4096;
 ///
 /// Number of bytes we can encode in one blob
 ///
-pub const ENCODABLE_BYTES_PER_BLOB: usize = BLOB_CHUNK_SIZE * ELEMENTS_PER_4844_BLOB;
+// SYSCOIN: Bitcoin DA accepts up to 2 MiB per blob; keep the legacy constant
+// name because the rest of the DA commitment path is keyed off this value.
+pub const ENCODABLE_BYTES_PER_BLOB: usize = 2 * 1024 * 1024;
 
 ///
 /// Maximal number of blobs that we support with blobs DA mode.
 ///
-pub const MAX_NUMBER_OF_BLOBS: usize = 9;
+// SYSCOIN: Allow a batch to commit up to 32 Bitcoin-DA payload chunks.
+pub const MAX_NUMBER_OF_BLOBS: usize = 32;
 
 pub const BUFFER_CAPACITY: usize = ENCODABLE_BYTES_PER_BLOB * MAX_NUMBER_OF_BLOBS;
 
 ///
 /// Blobs DA commitment generator.
 ///
-/// It encodes pubdata into the blobs using alloy default(`SimpleCoder`) encoding.
-/// The first element in the first blob used to encode length as `[0, len BE, 23 zeroes] BE`.
-/// Then blobs are filled with elements created from data chunked by 31 byte as `[0, chunk(31 byte)] BE`.
+/// SYSCOIN: It retains the legacy 31-byte length prefix in the committed byte
+/// stream, splits that stream into Bitcoin-DA payload chunks, and commits each
+/// chunk by its Blake2s data id. No EIP-4844 field-element encoding is applied.
 ///
 pub struct BlobCommitmentGenerator {
     buffer: ArrayVec<u8, BUFFER_CAPACITY>,
@@ -90,10 +87,11 @@ impl<O: IOOracle> DACommitmentGenerator<O> for BlobCommitmentGenerator {
 }
 
 ///
-/// Returns blob versioned hash.
+/// Returns the Blake2s data id for one Bitcoin-DA payload chunk.
 ///
-/// Please note, that `data` is not the blob itself, but data we encode into the blob.
-/// For encoding, we chunk `data` by 31 bytes and interpret each chunk as BE blob element.
+/// SYSCOIN: The advisor transports the data id in the first 32 bytes of the
+/// legacy commitment field. This function recomputes the id locally and rejects
+/// inconsistent advice; the legacy proof field is not a KZG proof in this mode.
 ///
 pub fn blob_versioned_hash_with_advisor(
     data: &[u8],
@@ -101,36 +99,21 @@ pub fn blob_versioned_hash_with_advisor(
 ) -> [u8; 32] {
     debug_assert!(data.len() <= ENCODABLE_BYTES_PER_BLOB);
 
-    // We get commitment and proof from an external source (advisor)
-    // Correctness is checked below
+    // SYSCOIN: Retrieve the compatibility payload from the advisor and bind it
+    // to the locally recomputed Bitcoin-DA data id.
     let commitment_and_proof = advisor.get_blob_commitment_and_proof_advice(data);
+    let mut advised_blob_data_id = [0u8; 32];
+    advised_blob_data_id.copy_from_slice(&commitment_and_proof.commitment[..32]);
+    let local_blob_data_id = blob_data_id(data);
 
-    let commitment = parse_g1_compressed(&commitment_and_proof.commitment)
-        .expect("Invalid blob commitment point");
-    let proof = parse_g1_compressed(&commitment_and_proof.proof).expect("Invalid blob proof point");
-    let versioned_hash = versioned_hash_for_kzg(commitment_and_proof.commitment.as_slice());
-    let evaluation_point = calculate_evaluation_point(data, &versioned_hash);
-    let opening_value = polynomial_evaluation::evaluate_blob_polynomial(data, &evaluation_point);
-
-    assert!(
-        crypto::bls12_381::verify_kzg_proof(
-            commitment,
-            proof,
-            evaluation_point.into_bigint(),
-            opening_value.into_bigint(),
-        ),
-        "Failed to verify blob proof"
+    assert_eq!(
+        advised_blob_data_id, local_blob_data_id,
+        "Blob data id advice mismatch"
     );
 
-    versioned_hash
+    local_blob_data_id
 }
 
-fn calculate_evaluation_point(data: &[u8], versioned_hash: &[u8]) -> crypto::bls12_381::Fr {
-    let mut hasher = crypto::blake2s::Blake2s256::new();
-    hasher.update(versioned_hash);
-    hasher.update(data);
-    let hash = hasher.finalize();
-    // truncate hash to 128 bits
-    // NOTE: it is safe to draw a random scalar at max 128 bits because of the schwartz zippel lemma
-    crypto::bls12_381::Fr::from_bigint(parse_u256_be(hash.rsplit_array_ref::<16>().1)).unwrap()
+fn blob_data_id(data: &[u8]) -> [u8; 32] {
+    crypto::blake2s::Blake2s256::digest(data)
 }

@@ -3,10 +3,20 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Constants
-U256BIGINTOPS_RATIO = 8
-BLAKE2ROUNDEXTENDED_RATIO = 16
+# SYSCOIN: effective-cycle coefficients keyed by delegation CSR ID. This also
+# corrects the stale U256 coefficient from 8 to the canonical geometry value 4.
+DELEGATION_RATIOS = {
+    1991: 16,  # Blake2RoundExtended
+    1994: 4,   # U256BigIntOps
+    1995: 4,   # SHA-256 round (CSR 0x7cb)
+}
 ERGS_PER_GAS = 256
+
+def weighted_delegation_cycles(delegations):
+    return sum(
+        count * DELEGATION_RATIOS.get(csr, 1)
+        for csr, count in delegations.items()
+    )
 
 def parse_blocks(text):
     return text.strip().split("==================")
@@ -41,14 +51,7 @@ def extract_markers(block):
 def compute_ratio(marker_data, ergs):
     cycles = marker_data['cycles']
     delegations = marker_data['delegations']
-    weighted_deleg = 0
-    for k, v in delegations.items():
-        if k == 1994:
-            weighted_deleg += v * U256BIGINTOPS_RATIO
-        elif k == 1991:
-            weighted_deleg += v * BLAKE2ROUNDEXTENDED_RATIO
-        else:
-            weighted_deleg += v
+    weighted_deleg = weighted_delegation_cycles(delegations)
 
     total_cycles = cycles + weighted_deleg
     gas = ergs / ERGS_PER_GAS

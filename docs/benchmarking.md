@@ -8,11 +8,14 @@ ZKsync OS performance is measured in **effective RISC-V cycles**, not wall-clock
 effective_cycles = raw_risc_v_cycles
                  + 16 × blake_delegations
                  + 4  × bigint_delegations
+                 + 4  × sha256_round_delegations
 ```
 
 The repository currently uses two closely related metrics:
 - `cycle_marker::print_cycle_markers()` and `zksync_os_runner::run_and_get_effective_cycles()` use the formula above.
-- `bench_scripts/compare_bench.py` derives its `Eff` column from `.bench` files using the same Blake/BigInt weights, and also adds `+1` for every other delegation type recorded in the marker output.
+- `bench_scripts/compare_bench.py` derives its `Eff` column from `.bench` files using the same Blake/BigInt/SHA-256 weights, and also adds `+1` for every other delegation type recorded in the marker output.
+
+The SHA-256 coefficient is conservative effective-cycle accounting, not a speed claim. It is the next power of two above the maximum delegation/main geometry ratio: `max(6/12, 271/192, 356/160) = 2.225`, rounded up to `4`.
 
 ## Quick Start
 
@@ -64,6 +67,7 @@ The comparison output is a markdown table with columns:
 - **Base/Head Raw** — raw RISC-V cycles excluding delegations.
 - **Base/Head Blake** — number of Blake2 delegation calls.
 - **Base/Head Bigint** — number of BigInt delegation calls.
+- **Base/Head SHA** — number of SHA-256 round delegation calls.
 
 `Base/Head Eff` is the comparison-script metric described above. Focus on that column when comparing two `.bench` files, and keep in mind it is slightly broader than the simulator-returned block effective value.
 
@@ -99,7 +103,7 @@ The block-wide marker is `"run_prepared"` — this is what produces the overall 
 1. Build RISC-V binary with `benchmarking` feature enabled
 2. Run block replay through RISC-V simulator (`zksync_os_runner`)
 3. Simulator records cycle counts at each CSR marker
-4. `cycle_marker::print_cycle_markers()` computes effective cycles for the block-wide marker using Blake/BigInt delegation weights
+4. `cycle_marker::print_cycle_markers()` computes effective cycles for the block-wide marker using Blake/BigInt/SHA-256 delegation weights
 5. Results written to file at `MARKER_PATH` (default: `markers.bench`)
 6. Python scripts parse and compare `.bench` files, adding `+1` for other delegation types in the comparison report
 
@@ -109,13 +113,19 @@ The `.bench` files produced by `cycle_marker` contain sections like:
 
 ```
 === Cycle markers:
-run_prepared: net cycles: 12345678, net delegations: {1991: 100, 1994: 200}
-some_inner_label: net cycles: 456789, net delegations: {1991: 50}
-Total delegations: {1991: 100, 1994: 200}
+run_prepared: net cycles: 12345678, net delegations: {1991: 100, 1994: 200, 1995: 640}
+some_inner_label: net cycles: 456789, net delegations: {1995: 64}
+Total delegations: {1991: 100, 1994: 200, 1995: 640}
 ==================
 ```
 
-Delegation IDs: `1991` = Blake2, `1994` = BigInt.
+Delegation IDs and coefficients:
+
+| Decimal ID | CSR | Circuit | Coefficient |
+|---:|---:|---|---:|
+| `1991` | `0x7c7` | Blake2RoundExtended | `16` |
+| `1994` | `0x7ca` | U256BigIntOps | `4` |
+| `1995` | `0x7cb` | SHA-256 round | `4` |
 
 ## Manual Commands
 
@@ -205,6 +215,7 @@ The CI workflow (`.github/workflows/bench.yml`) runs the full comparison automat
 | `tests/instances/eth_runner/blocks/` | Benchmark block fixtures |
 | `tests/instances/precompiles/` | Precompile benchmark tests |
 | `bench_scripts/compare_bench.py` | Compares base vs head `.bench` files |
+| `bench_scripts/test_delegation_weights.py` | Verifies benchmark consumers use identical delegation coefficients |
 | `bench_scripts/parse_flamegraph.py` | Converts flamegraph SVG to text summary with self-cost and call stacks |
 | `bench_scripts/parse_opcodes.py` | Parses opcode frequency from simulator output |
 | `.github/workflows/bench.yml` | CI benchmarking pipeline |

@@ -12,6 +12,8 @@ pub mod p256_verify;
 pub mod point_evaluation;
 pub mod ripemd160;
 pub mod sha256;
+// SYSCOIN: fixed-parameter post-quantum signature verifier at precompile 0x101.
+pub mod slh_dsa_sha2_128_24_verify;
 
 ///
 /// Internal utility function to reverse byte array
@@ -40,6 +42,8 @@ impl<R: Resources> SystemFunctions<R> for NoStdSystemFunctions {
     type Secp256r1AddProjective = MissingSystemFunction;
     type Secp256r1MulProjective = MissingSystemFunction;
     type P256Verify = p256_verify::P256VerifyImpl;
+    // SYSCOIN: bind the 0x101 hook to the SLH-DSA-SHA2-128-24 implementation.
+    type SlhDsaSha212824Verify = slh_dsa_sha2_128_24_verify::SlhDsaSha212824VerifyImpl;
     type Bn254Add = bn254_ecadd::Bn254AddImpl;
     type Bn254Mul = bn254_ecmul::Bn254MulImpl;
     type Bn254PairingCheck = bn254_pairing_check::Bn254PairingCheckImpl;

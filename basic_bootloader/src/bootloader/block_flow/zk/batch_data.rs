@@ -25,6 +25,8 @@ pub struct ZKBatchDataKeeper<A: alloc::alloc::Allocator, O: IOOracle> {
     pub da_commitment_scheme: Option<DACommitmentScheme>,
     pub da_commitment_generator: Option<alloc::boxed::Box<dyn DACommitmentGenerator<O>, A>>,
     pub logs_storage: ArrayVec<Bytes32, 16384>,
+    // SYSCOIN: ordered root of compact edge DA refs emitted by Gateway child-chain commits.
+    pub edge_da_refs_root: Bytes32,
     enforced_txs_accumulator: TransactionsRollingKeccakHasher,
     // Includes all transactions
     pub tx_count: U256,
@@ -46,6 +48,7 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
             da_commitment_generator: None,
             da_commitment_scheme: None,
             logs_storage: ArrayVec::new(),
+            edge_da_refs_root: Bytes32::ZERO,
             // keccak256([])
             enforced_txs_accumulator: TransactionsRollingKeccakHasher::empty(),
             tx_count: U256::ZERO,
@@ -149,6 +152,7 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
             upgrade_tx_hash: self.upgrade_tx_hash.unwrap(),
             interop_roots_rolling_hash: self.interop_roots_rolling_hash,
             settlement_layer_chain_id: self.settlement_layer_chain_id.unwrap(),
+            edge_da_refs_root: self.edge_da_refs_root,
         };
         let public_input = BatchPublicInput {
             state_before: self.initial_state_commitment.unwrap(),

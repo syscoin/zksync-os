@@ -18,6 +18,7 @@ use basic_system::system_implementation::flat_storage_model::{
     address_into_special_storage_key, AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
     TREE_HEIGHT,
 };
+use forward_system::run::output::BlockOutput;
 use forward_system::run::query_processors::DACommitmentSchemeResponder;
 use forward_system::run::query_processors::EthereumCLResponder;
 use forward_system::run::query_processors::EthereumTargetBlockHeaderResponder;
@@ -28,7 +29,6 @@ use forward_system::run::query_processors::TxDataResponder;
 use forward_system::run::query_processors::UARTPrintResponder;
 use forward_system::run::result_keeper::ForwardRunningResultKeeper;
 use forward_system::run::test_impl::{InMemoryPreimageSource, InMemoryTree, NoopTxCallback};
-use forward_system::run::output::BlockOutput;
 use forward_system::system::bootloader::run_forward_no_panic;
 use forward_system::system::system_types::ethereum::EthereumStorageSystemTypesWithPostOps;
 use forward_system::system::system_types::ForwardRunningSystem;
@@ -429,6 +429,8 @@ impl<const RANDOMIZED_TREE: bool> Chain<RANDOMIZED_TREE> {
             pubdata_limit: block_context.pubdata_limit,
             mix_hash: block_context.mix_hash,
             blob_fee: block_context.blob_fee,
+            // SYSCOIN: ordinary rig blocks carry no canonical upgrade hash.
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
         };
         let tx_source = TxListSource {
             transactions: transactions.into(),
@@ -620,6 +622,8 @@ impl<const RANDOMIZED_TREE: bool> Chain<RANDOMIZED_TREE> {
             pubdata_limit: block_context.pubdata_limit,
             mix_hash: block_context.mix_hash,
             blob_fee: block_context.blob_fee,
+            // SYSCOIN: ordinary rig blocks carry no canonical upgrade hash.
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
         };
         let state_commitment = FlatStorageCommitment::<{ TREE_HEIGHT }> {
             root: *self.state_tree.storage_tree.root(),

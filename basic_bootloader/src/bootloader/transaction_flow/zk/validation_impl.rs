@@ -6,8 +6,9 @@ use crate::bootloader::transaction::blobs::parse_blobs_list;
 use crate::bootloader::transaction::rlp_encoded::AccessListForAddress;
 use crate::bootloader::transaction::{charge_keccak, Transaction};
 use crate::bootloader::transaction_flow::gas_helpers::{
-    calculate_l2_tx_intrinsic_computational_native_resources, calculate_l2_tx_intrinsic_pubdata,
-    calculate_tx_intrinsic_gas, create_resources_for_tx, get_gas_price, L2ResourcesPolicy,
+    calculate_l2_tx_intrinsic_computational_native_resources_for_chain,
+    calculate_l2_tx_intrinsic_pubdata, calculate_tx_intrinsic_gas, create_resources_for_tx,
+    get_gas_price, L2ResourcesPolicy,
 };
 use crate::bootloader::BasicBootloaderExecutionConfig;
 use crate::require;
@@ -179,15 +180,20 @@ where
         access_list_storage_keys,
         authorization_list_num,
     );
-    let intrinsic_computational_native = calculate_l2_tx_intrinsic_computational_native_resources(
-        calldata.len() as u64,
-        access_list_accounts,
-        access_list_storage_keys,
+    let intrinsic_computational_native =
+        calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+            calldata.len() as u64,
+            access_list_accounts,
+            access_list_storage_keys,
+            authorization_list_num,
+            transaction.is_service(),
+            system.get_chain_id(),
+        );
+    let intrinsic_pubdata = calculate_l2_tx_intrinsic_pubdata(
         authorization_list_num,
         transaction.is_service(),
+        system.get_chain_id(),
     );
-    let intrinsic_pubdata =
-        calculate_l2_tx_intrinsic_pubdata(authorization_list_num, transaction.is_service());
 
     // Now we will materialize resources, from which we will try to charge intrinsic cost on top.
     let tx_resources = create_resources_for_tx::<S, L2ResourcesPolicy>(
@@ -509,6 +515,8 @@ where
         resources_before_refund: S::Resources::empty(),
         intrinsic_resources,
         authorization_list_num,
+        // SYSCOIN: decided in `precharge_fee` after validation completes.
+        fee_paid_from_gas_tank: false,
     })
 }
 

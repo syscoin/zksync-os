@@ -209,6 +209,16 @@ where
                                         .upgrade_tx_recorder
                                         .add_upgrade_tx_hash(&tx_processing_result.tx_hash);
                                 }
+                                if status && tx_processing_result.collects_syscoin_edge_da_refs {
+                                    // SYSCOIN: bind compact edge DA refs only to the accepted
+                                    // Gateway commit transaction that is authorized by metadata.
+                                    block_data
+                                        .syscoin_compact_edge_da_ref_tx_numbers
+                                        .try_push(block_data.current_transaction_number)
+                                        .map_err(|_| {
+                                            internal_error!("too many Syscoin edge DA ref txs")
+                                        })?;
+                                }
                                 block_data.current_transaction_number += 1;
 
                                 result_keeper.tx_processed(Ok(TxProcessingOutput {

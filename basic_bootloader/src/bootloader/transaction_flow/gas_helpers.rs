@@ -7,7 +7,9 @@ use crate::bootloader::constants::{
     L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_AUTHORIZATION,
     L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE, L2_TX_INTRINSIC_PUBDATA,
     L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION, SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST,
-    SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE, TX_INTRINSIC_GAS,
+    SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE,
+    SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD, SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA,
+    TX_INTRINSIC_GAS,
 };
 use crate::require;
 use constants::{CALLDATA_TOKEN_GAS_COST, DEPLOYMENT_TX_EXTRA_INTRINSIC_GAS};
@@ -204,6 +206,26 @@ pub fn calculate_l2_tx_intrinsic_computational_native_resources(
     authorization_list_num: u64,
     is_service: bool,
 ) -> u64 {
+    calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+        calldata_byte_length,
+        access_list_accounts,
+        access_list_storages,
+        authorization_list_num,
+        is_service,
+        0,
+    )
+}
+
+/// Calculates L2 intrinsic computational native with chain-specific system
+/// fee mechanics included.
+pub fn calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+    calldata_byte_length: u64,
+    access_list_accounts: u64,
+    access_list_storages: u64,
+    authorization_list_num: u64,
+    is_service: bool,
+    chain_id: u64,
+) -> u64 {
     let mut intrinsic_computational_native_resources = if is_service {
         SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST
     } else {
@@ -234,6 +256,17 @@ pub fn calculate_l2_tx_intrinsic_computational_native_resources(
             authorization_list_num
                 .saturating_mul(L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_AUTHORIZATION),
         );
+
+    // SYSCOIN: fee selection happens after validation reads tank storage, so
+    // every non-service L2 transaction on the configured edge chain must
+    // prepay the worst of successful tank settlement (including slots created
+    // by an earlier transaction in the batch) and native fallback.
+    if !is_service
+        && crate::bootloader::transaction_flow::zk::syscoin_gas_tank::gas_tank_enabled(chain_id)
+    {
+        intrinsic_computational_native_resources = intrinsic_computational_native_resources
+            .saturating_add(SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD);
+    }
 
     intrinsic_computational_native_resources
 }
@@ -299,7 +332,11 @@ pub fn calculate_tx_intrinsic_gas(
     intrinsic_gas
 }
 
-pub fn calculate_l2_tx_intrinsic_pubdata(authorization_list_num: u64, is_service: bool) -> u64 {
+pub fn calculate_l2_tx_intrinsic_pubdata(
+    authorization_list_num: u64,
+    is_service: bool,
+    chain_id: u64,
+) -> u64 {
     if is_service {
         // there is no intrinsic pubdata for service txs
         return 0;
@@ -310,7 +347,98 @@ pub fn calculate_l2_tx_intrinsic_pubdata(authorization_list_num: u64, is_service
         authorization_list_num.saturating_mul(L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION),
     );
 
+    // SYSCOIN: when the zkSYS gas tank is enabled, budget the worst-case tank
+    // slot diffs written by fee charging (sender credit, coinbase credit,
+    // total credits). Charged as an upper bound for all L2 txs on tank-enabled
+    // deployments, mirroring the worst-case budgeting of the balance diffs.
+    if crate::bootloader::transaction_flow::zk::syscoin_gas_tank::gas_tank_enabled(chain_id) {
+        intrinsic_pubdata = intrinsic_pubdata.saturating_add(SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA);
+    }
+
     intrinsic_pubdata
+}
+
+#[cfg(test)]
+mod syscoin_gas_tank_tests {
+    use super::*;
+    use crate::bootloader::transaction_flow::zk::syscoin_edge_da::syscoin_gas_tank_chain_id;
+    use crate::bootloader::transaction_flow::zk::syscoin_gas_tank::gas_tank_enabled;
+
+    #[test]
+    fn shared_binary_adds_tank_resources_only_on_the_configured_edge_chain() {
+        let edge_chain_id = syscoin_gas_tank_chain_id();
+        assert_ne!(edge_chain_id, 0, "test build must configure the edge chain");
+        assert!(gas_tank_enabled(edge_chain_id));
+
+        let other_chain_id = if edge_chain_id == u64::MAX {
+            edge_chain_id - 1
+        } else {
+            edge_chain_id + 1
+        };
+        assert!(!gas_tank_enabled(other_chain_id));
+
+        let gateway_pubdata = calculate_l2_tx_intrinsic_pubdata(0, false, other_chain_id);
+        let edge_pubdata = calculate_l2_tx_intrinsic_pubdata(0, false, edge_chain_id);
+        assert_eq!(gateway_pubdata, L2_TX_INTRINSIC_PUBDATA);
+        assert_eq!(
+            edge_pubdata,
+            gateway_pubdata + SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA
+        );
+
+        let gateway_computational =
+            calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+                0,
+                0,
+                0,
+                0,
+                false,
+                other_chain_id,
+            );
+        let edge_computational = calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+            0,
+            0,
+            0,
+            0,
+            false,
+            edge_chain_id,
+        );
+        assert_eq!(
+            SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD,
+            1_290_920,
+        );
+        assert_eq!(
+            SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD
+                + 3 * crate::bootloader::constants::ACCOUNT_UPDATE_COST,
+            1_305_920,
+            "full tank work must match the named Keccak/storage cost components",
+        );
+        assert_eq!(
+            edge_computational,
+            gateway_computational + SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD,
+        );
+        assert_eq!(
+            gateway_computational,
+            calculate_l2_tx_intrinsic_computational_native_resources(0, 0, 0, 0, false),
+        );
+
+        // Service transactions never use the gas tank on either chain.
+        assert_eq!(calculate_l2_tx_intrinsic_pubdata(0, true, edge_chain_id), 0);
+        assert_eq!(
+            calculate_l2_tx_intrinsic_pubdata(0, true, other_chain_id),
+            0
+        );
+        assert_eq!(
+            calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+                0,
+                0,
+                0,
+                0,
+                true,
+                edge_chain_id,
+            ),
+            calculate_l2_tx_intrinsic_computational_native_resources(0, 0, 0, 0, true),
+        );
+    }
 }
 
 ///

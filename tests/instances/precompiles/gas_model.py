@@ -5,10 +5,20 @@ from pprint import pprint
 from collections import defaultdict
 from statistics import mean, median
 
-# Constants
-U256BIGINTOPS_RATIO = 4
-BLAKE2ROUNDEXTENDED_RATIO = 16
+# SYSCOIN: effective-cycle coefficients keyed by delegation CSR ID. CSR 1995
+# (0x7cb, SHA-256 round) uses the conservative geometry coefficient 4.
+DELEGATION_RATIOS = {
+    1991: 16,  # Blake2RoundExtended
+    1994: 4,   # U256BigIntOps
+    1995: 4,   # SHA-256 round
+}
 ERGS_PER_GAS = 256
+
+def weighted_delegation_cycles(delegations):
+    return sum(
+        count * DELEGATION_RATIOS.get(csr, 1)
+        for csr, count in delegations.items()
+    )
 
 def parse_delegation_block(text):
     match = re.search(r"=== Cycle markers:\n(.*?)\nTotal delegations", text, re.DOTALL)
@@ -85,14 +95,7 @@ def compute_ratios(all_results):
             ergs = marker['ergs']
 
             # Weighted delegation sum
-            weighted_deleg_sum = 0
-            for k, v in delegations.items():
-                if k == 1994:
-                    weighted_deleg_sum += v * U256BIGINTOPS_RATIO
-                elif k == 1991:
-                    weighted_deleg_sum += v * BLAKE2ROUNDEXTENDED_RATIO
-                else:
-                    weighted_deleg_sum += v  # Default weight is 1
+            weighted_deleg_sum = weighted_delegation_cycles(delegations)
 
             total_cycles = cycles + weighted_deleg_sum
             gas = ergs / ERGS_PER_GAS

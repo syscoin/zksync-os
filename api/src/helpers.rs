@@ -13,7 +13,8 @@ use alloy_sol_types::SolCall;
 use basic_bootloader::bootloader::constants::BOOTLOADER_FORMAL_ADDRESS;
 use basic_bootloader::bootloader::transaction::rlp_encoded::transaction_types::service_tx::SERVICE_TX_TYPE;
 use basic_bootloader::bootloader::transaction_flow::gas_helpers::{
-    calculate_l2_tx_intrinsic_computational_native_resources, calculate_l2_tx_intrinsic_pubdata,
+    calculate_l2_tx_intrinsic_computational_native_resources_for_chain,
+    calculate_l2_tx_intrinsic_pubdata,
 };
 use basic_system::system_implementation::flat_storage_model::bytecode_padding_len;
 use basic_system::system_implementation::flat_storage_model::AccountProperties;
@@ -400,6 +401,47 @@ pub fn validate_l2_tx_intrinsic_native_resources(
     max_fee_per_gas: U256,
     max_priority_fee_per_gas: U256,
 ) -> Result<(), ()> {
+    // SYSCOIN: preserve the upstream API for callers that do not have a
+    // runtime chain ID. Chain ID zero cannot enable the configured gas tank.
+    validate_l2_tx_intrinsic_native_resources_for_chain(
+        0,
+        base_fee,
+        native_price,
+        pubdata_price,
+        gas_limit,
+        calldata_length,
+        access_list_accounts,
+        access_list_storage_keys,
+        authorization_list_num,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+    )
+}
+
+/// Validates intrinsic native resources using the runtime chain ID.
+///
+/// SYSCOIN: callers that validate transactions for a concrete block or
+/// mempool chain must use this entry point so the edge-only gas-tank intrinsic
+/// allowances match the shared bootloader binary. The computational allowance
+/// includes cold-new pricing when a preceding transaction in the same batch
+/// creates the sender and total-credit slots.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_unit_err)]
+pub fn validate_l2_tx_intrinsic_native_resources_for_chain(
+    // SYSCOIN: the shared Gateway/edge app must price the gas-tank storage
+    // allowance from the runtime chain ID committed in block metadata.
+    chain_id: u64,
+    base_fee: U256,
+    native_price: U256,
+    pubdata_price: U256,
+    gas_limit: u64,
+    calldata_length: u64,
+    access_list_accounts: u64,
+    access_list_storage_keys: u64,
+    authorization_list_num: u64,
+    max_fee_per_gas: U256,
+    max_priority_fee_per_gas: U256,
+) -> Result<(), ()> {
     // Validate fee fields
     if max_priority_fee_per_gas > max_fee_per_gas {
         return Err(());
@@ -434,7 +476,8 @@ pub fn validate_l2_tx_intrinsic_native_resources(
     };
 
     // Intrinsic pubdata
-    let intrinsic_pubdata = calculate_l2_tx_intrinsic_pubdata(authorization_list_num, false);
+    let intrinsic_pubdata =
+        calculate_l2_tx_intrinsic_pubdata(authorization_list_num, false, chain_id);
     let intrinsic_pubdata_overhead = native_per_pubdata.saturating_mul(intrinsic_pubdata);
 
     let native_limit = native_limit
@@ -445,17 +488,109 @@ pub fn validate_l2_tx_intrinsic_native_resources(
     let native_limit = native_limit.min(MAX_NATIVE_COMPUTATIONAL);
 
     // Intrinsic computational native
-    let intrinsic_computational_native = calculate_l2_tx_intrinsic_computational_native_resources(
-        calldata_length,
-        access_list_accounts,
-        access_list_storage_keys,
-        authorization_list_num,
-        false,
-    );
+    let intrinsic_computational_native =
+        calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+            calldata_length,
+            access_list_accounts,
+            access_list_storage_keys,
+            authorization_list_num,
+            false,
+            chain_id,
+        );
 
     native_limit
         .checked_sub(intrinsic_computational_native)
         .ok_or(())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod syscoin_intrinsic_resource_tests {
+    use super::*;
+    use basic_bootloader::bootloader::constants::SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD;
+    use basic_bootloader::bootloader::transaction_flow::gas_helpers::calculate_l2_tx_intrinsic_computational_native_resources;
+    use basic_bootloader::bootloader::transaction_flow::zk::syscoin_edge_da::syscoin_gas_tank_chain_id;
+
+    fn validate_at_gas_limit(chain_id: u64, gas_limit: u64) -> Result<(), ()> {
+        validate_l2_tx_intrinsic_native_resources_for_chain(
+            chain_id,
+            U256::ONE, // base fee
+            U256::ONE, // native price
+            U256::ONE, // pubdata price
+            gas_limit,
+            0,         // calldata length
+            0,         // access-list accounts
+            0,         // access-list storage keys
+            0,         // authorizations
+            U256::ONE, // max fee
+            U256::ZERO,
+        )
+    }
+
+    #[test]
+    fn shared_binary_api_prices_tank_resources_only_for_the_edge_chain() {
+        let edge_chain_id = syscoin_gas_tank_chain_id();
+        assert_ne!(edge_chain_id, 0, "test build must configure the edge chain");
+        let gateway_chain_id = if edge_chain_id == u64::MAX {
+            edge_chain_id - 1
+        } else {
+            edge_chain_id + 1
+        };
+
+        let gateway_computational =
+            calculate_l2_tx_intrinsic_computational_native_resources(0, 0, 0, 0, false);
+        let edge_computational = calculate_l2_tx_intrinsic_computational_native_resources_for_chain(
+            0,
+            0,
+            0,
+            0,
+            false,
+            edge_chain_id,
+        );
+        assert_eq!(
+            edge_computational,
+            gateway_computational + SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD,
+        );
+        let gateway_pubdata = calculate_l2_tx_intrinsic_pubdata(0, false, gateway_chain_id);
+        let edge_pubdata = calculate_l2_tx_intrinsic_pubdata(0, false, edge_chain_id);
+        assert!(edge_pubdata > gateway_pubdata);
+
+        // SYSCOIN: a limit exactly covering the Gateway intrinsic resources
+        // must not include the edge-only tank allowance. The same limit must
+        // fail on the edge chain until that allowance is supplied.
+        let gateway_limit = gateway_computational
+            .checked_add(gateway_pubdata)
+            .expect("intrinsic test limit must fit u64");
+        assert_eq!(
+            validate_at_gas_limit(gateway_chain_id, gateway_limit),
+            Ok(())
+        );
+        assert_eq!(validate_at_gas_limit(edge_chain_id, gateway_limit), Err(()));
+        assert_eq!(
+            validate_l2_tx_intrinsic_native_resources(
+                U256::ONE,
+                U256::ONE,
+                U256::ONE,
+                gateway_limit,
+                0,
+                0,
+                0,
+                0,
+                U256::ONE,
+                U256::ZERO,
+            ),
+            validate_at_gas_limit(0, gateway_limit),
+            "the compatibility API must retain chain-zero/no-tank semantics",
+        );
+        assert_eq!(
+            validate_at_gas_limit(
+                edge_chain_id,
+                edge_computational
+                    .checked_add(edge_pubdata)
+                    .expect("intrinsic test limit must fit u64"),
+            ),
+            Ok(())
+        );
+    }
 }

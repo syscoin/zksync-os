@@ -409,6 +409,8 @@ where
         native_used,
         pubdata_used: pubdata_used + intrinsic_pubdata,
         blob_gas_used: 0,
+        // SYSCOIN: L1 transactions never contribute compact edge-DA references.
+        collects_syscoin_edge_da_refs: false,
     })
 }
 

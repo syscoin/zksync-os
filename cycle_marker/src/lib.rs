@@ -160,10 +160,15 @@ macro_rules! wrap_with_resources {
 
 #[cfg(all(feature = "use_risc_v_simulator", not(target_arch = "riscv32")))]
 pub fn print_cycle_markers() -> Option<u64> {
-    const BLAKE_DELEGATION_ID: u32 = 1991;
-    const BIGINT_DELEGATION_ID: u32 = 1994;
-    const BLAKE_DELEGATION_COEFF: u64 = 16;
-    const BIGINT_DELEGATION_COEFF: u64 = 4;
+    // SYSCOIN: coefficients are the next powers of two above each
+    // delegation circuit's maximum width ratio to the main VM geometry.
+    // SHA-256 round CSR 0x7cb is 1995 and has max(6/12, 271/192, 356/160)
+    // = 2.225, hence the conservative coefficient 4.
+    const DELEGATION_COEFFICIENTS: [(u32, u64); 3] = [
+        (1991, 16), // Blake2RoundExtended
+        (1994, 4),  // U256BigIntOps
+        (1995, 4),  // SHA-256 round
+    ];
     const BLOCK_WIDE_LABEL: &str = "run_prepared";
     use risc_v_simulator::cycle::state::*;
     let cm = take_cycle_marker();
@@ -219,21 +224,13 @@ pub fn print_cycle_markers() -> Option<u64> {
             // That is: raw cycles plus the delegation counts, weighted by
             // the delegation coefficients (derived from the circuits
             // geometry)
-            block_effective = Some(
-                diff.cycles
-                    + BLAKE_DELEGATION_COEFF
-                        * diff
-                            .delegations
-                            .get(&BLAKE_DELEGATION_ID)
-                            .cloned()
-                            .unwrap_or_default()
-                    + BIGINT_DELEGATION_COEFF
-                        * diff
-                            .delegations
-                            .get(&BIGINT_DELEGATION_ID)
-                            .cloned()
-                            .unwrap_or_default(),
-            )
+            let delegated_cycles = DELEGATION_COEFFICIENTS
+                .into_iter()
+                .map(|(id, coefficient)| {
+                    coefficient * diff.delegations.get(&id).cloned().unwrap_or_default()
+                })
+                .sum::<u64>();
+            block_effective = Some(diff.cycles + delegated_cycles)
         }
     }
     log_marker(&format!(

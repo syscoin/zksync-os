@@ -95,13 +95,13 @@ esac
 # Clean up only the artifacts for this mode
 rm -f "$BIN_NAME" "$ELF_NAME" "$TEXT_NAME"
 
-# Build
-cargo build --features "$FEATURES" --release
+# SYSCOIN: canonical proving binaries must use the reviewed dependency graph.
+cargo build --locked --features "$FEATURES" --release
 
 # Produce and rename outputs
-cargo objcopy --features "$FEATURES" --release -- -O binary "$BIN_NAME"
-cargo objcopy --features "$FEATURES" --release -- -R .text "$ELF_NAME"
-cargo objcopy --features "$FEATURES" --release -- -O binary --only-section=.text "$TEXT_NAME"
+cargo objcopy --locked --features "$FEATURES" --release -- -O binary "$BIN_NAME"
+cargo objcopy --locked --features "$FEATURES" --release -- -R .text "$ELF_NAME"
+cargo objcopy --locked --features "$FEATURES" --release -- -O binary --only-section=.text "$TEXT_NAME"
 
 # Summary
 echo "Built [$TYPE] with features: $FEATURES"

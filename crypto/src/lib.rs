@@ -35,6 +35,10 @@ pub mod ripemd160;
 pub mod secp256k1;
 pub mod secp256r1;
 pub mod sha256;
+// SYSCOIN: SHA-256 implementation whose compression rounds can be delegated by
+// the proving RISC-V guest. It is intentionally separate from `sha256` so the
+// standard EVM SHA-256 precompile and its pricing remain unchanged.
+pub mod sha256_delegated;
 pub mod sha3;
 
 #[cfg(any(

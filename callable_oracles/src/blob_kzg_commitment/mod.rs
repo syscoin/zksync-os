@@ -2,17 +2,15 @@ use crate::utils::evaluate::read_memory_as_u8;
 use crate::utils::usize_slice_iterator::UsizeSliceIteratorOwned;
 use basic_bootloader::bootloader::block_flow::zk::da_commitment_generator::KZGCommitmentAndProof;
 use basic_bootloader::bootloader::block_flow::zk::da_commitment_generator::BLOB_COMMITMENT_AND_PROOF_QUERY_ID;
-use basic_system::system_functions::point_evaluation::versioned_hash_for_kzg;
 use crypto::MiniDigest;
 use oracle_provider::OracleQueryProcessor;
 use risc_v_simulator::abstractions::memory::MemorySource;
 use zk_ee::oracle::usize_serialization::UsizeSerializable;
 
 ///
-/// Query processor, which returns blob kzg commitment and proof for a given data.
-///
-/// Proof is basically kzg proof in a point derived from data and kzg commitment,
-/// so it allows to verify kzg commitment correctness by validating this proof and value of the polynomial in this point.
+/// SYSCOIN: Query processor that returns a Blake2s Bitcoin-DA data id in the
+/// first 32 bytes of the legacy KZG commitment field. The proof field is zero;
+/// the guest independently recomputes and checks the data id.
 ///
 pub struct BlobCommitmentAndProofQuery<M: MemorySource> {
     _marker: std::marker::PhantomData<M>,
@@ -63,39 +61,14 @@ impl<M: MemorySource> OracleQueryProcessor<M> for BlobCommitmentAndProofQuery<M>
     }
 }
 
-///
-/// Calculate kzg commitment and proof at the point `blake2s(versioned_hash & data)` for blob created from passed data.
-///
-/// For encoding, we chunk `data` by 31 bytes and interpret each chunk as BE blob element.
-///
+/// SYSCOIN: Keep the legacy function name/interface, but return blob data id
+/// packed into the legacy struct for compatibility.
 pub fn blob_kzg_commitment_and_proof(data: &[u8]) -> KZGCommitmentAndProof {
-    let mut blob = [0u8; 4096 * 32];
-    for (i, chunk) in data.chunks(31).enumerate() {
-        let fe = &mut blob[i * 32..(i + 1) * 32];
-        fe[1..1 + chunk.len()].copy_from_slice(chunk);
-    }
-    let blob = c_kzg::Blob::new(blob);
+    let blob_data_id = crypto::blake2s::Blake2s256::digest(data);
 
-    let kzg_settings = c_kzg::ethereum_kzg_settings(8);
+    let mut commitment = [0u8; 48];
+    commitment[..32].copy_from_slice(&blob_data_id);
+    let proof = [0u8; 48];
 
-    let commitment = kzg_settings.blob_to_kzg_commitment(&blob).unwrap();
-
-    let mut hasher = crypto::blake2s::Blake2s256::new();
-    hasher.update(versioned_hash_for_kzg(commitment.as_slice()).as_slice());
-    hasher.update(data);
-    let mut challenge_point = hasher.finalize();
-    // truncate hash to 128 bits
-    // NOTE: it is safe to draw a random scalar at max 128 bits because of the schwartz zippel lemma
-    for byte in challenge_point[0..16].iter_mut() {
-        *byte = 0;
-    }
-    let p = kzg_settings
-        .compute_kzg_proof(&blob, &c_kzg::Bytes32::new(challenge_point))
-        .unwrap();
-    let proof = p.0;
-
-    KZGCommitmentAndProof {
-        commitment: commitment.to_bytes().into_inner(),
-        proof: proof.to_bytes().into_inner(),
-    }
+    KZGCommitmentAndProof { commitment, proof }
 }

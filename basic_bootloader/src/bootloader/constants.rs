@@ -3,9 +3,9 @@ use basic_system::cost_constants::{
 };
 use basic_system::system_functions::keccak256::keccak256_native_cost_for_rounds_u64;
 use basic_system::system_implementation::flat_storage_model::cost_constants::{
-    COLD_NEW_STORAGE_READ_NATIVE_COST, PREIMAGE_CACHE_SET_NATIVE_COST,
-    WARM_ACCOUNT_CACHE_ACCESS_NATIVE_COST, WARM_ACCOUNT_CACHE_WRITE_EXTRA_NATIVE_COST,
-    WARM_STORAGE_READ_NATIVE_COST,
+    COLD_NEW_STORAGE_READ_NATIVE_COST, COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST,
+    PREIMAGE_CACHE_SET_NATIVE_COST, WARM_ACCOUNT_CACHE_ACCESS_NATIVE_COST,
+    WARM_ACCOUNT_CACHE_WRITE_EXTRA_NATIVE_COST, WARM_STORAGE_READ_NATIVE_COST,
 };
 use evm_interpreter::native_resource_constants::COPY_BYTE_NATIVE_COST;
 use evm_interpreter::ERGS_PER_GAS;
@@ -77,6 +77,24 @@ pub const L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST: u64 = ECRECOVER_NATIVE_COST
     keccak256_native_cost_for_rounds_u64(3) * 2 + // keccak for signing and full hash, 2 rounds worst case tx size + 1 round precharge for dynamic parts
     ACCOUNT_UPDATE_COST + // balance change for fee prepayment
     ACCOUNT_UPDATE_COST * 2 + keccak256_native_cost_for_rounds_u64(1); // post execution logic: transferring fee to coinbase, transferring the gas refund, hashing of tx hash into rolling hash
+
+// SYSCOIN: worst-case native work for successful gas-tank fee settlement. A
+// sender can deposit earlier in the same batch; the flat-storage cache then
+// retains `is_new_slot` even though sender credit and totalCredits are nonzero.
+// The terms are three mapping-slot Keccaks; three cold-new reads (sender,
+// total, and operator); two warm rereads (sender refund and total settlement);
+// and four new-slot writes (sender precharge/refund, operator, and total).
+// A successful tank payment skips the three account updates already included
+// in `L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST`, so only the difference is
+// added on the configured edge chain. The same bound also covers the cheaper
+// insufficient-credit lookup followed by native fees.
+const SYSCOIN_GAS_TANK_MAX_COMPUTATIONAL_NATIVE: u64 = 3 * keccak256_native_cost_for_rounds_u64(1)
+    + 3 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
+    + 2 * WARM_STORAGE_READ_NATIVE_COST
+    + 4 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST);
+
+pub const SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_OVERHEAD: u64 =
+    SYSCOIN_GAS_TANK_MAX_COMPUTATIONAL_NATIVE - 3 * ACCOUNT_UPDATE_COST;
 
 /// Service tx intrinsic computational native cost.
 /// Service txs are not signed, so there is no ecrecover and only a single
@@ -206,6 +224,12 @@ const SENDER_ACCOUNT_INTRINSIC_PUBDATA: u64 = 32 /*key*/ + 1 /*account metadata*
 /// Constant part of l2 tx intrinsic pubdata.
 pub const L2_TX_INTRINSIC_PUBDATA: u64 =
     SENDER_ACCOUNT_INTRINSIC_PUBDATA + COINBASE_BALANCE_INTRINSIC_PUBDATA;
+
+// SYSCOIN: worst-case pubdata for zkSYS gas-tank fee payment: three
+// storage-slot diffs (sender credit, coinbase credit, total credits), each
+// priced as a 32-byte key plus a 34-byte uncompressed value update, matching
+// the worst-case convention of COINBASE_BALANCE_INTRINSIC_PUBDATA.
+pub const SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA: u64 = 3 * (32 + 34);
 
 /// L2 tx authorization intrinsic pubdata.
 pub const L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION: u64 = // Full diff compression:

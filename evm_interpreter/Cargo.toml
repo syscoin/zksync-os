@@ -25,6 +25,8 @@ paste = { workspace = true }
 point_eval_precompile = []
 mock-unsupported-precompiles = []
 p256_precompile = []
+# SYSCOIN: expose the fixed-parameter SLH-DSA verifier hook at 0x101.
+slh_dsa_precompile = []
 eip-7645 = []
 eip-2537 = []
 eip-152 = []
