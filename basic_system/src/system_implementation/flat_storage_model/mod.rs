@@ -619,7 +619,7 @@ impl<
 
                 state_diffs_hasher.update(derived_key.as_u8_ref());
                 state_diffs_hasher.update(r.value().as_u8_ref());
-                observer(derived_key, r.value());
+                observer(derived_key, *r.value());
                 Ok(())
             })
             .map_err(|_| internal_error!("Failed to compute state diffs hash"))?;
