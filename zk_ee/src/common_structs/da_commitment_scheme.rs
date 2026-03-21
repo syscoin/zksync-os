@@ -16,8 +16,7 @@ pub enum DACommitmentScheme {
     None,
     /// Commitment will be equals to 0, used for validiums.
     EmptyNoDA,
-    /// Keccak of stateDiffHash and keccak(pubdata). Can be used by custom DA solutions.
-    /// Currently not supported.
+    /// Keccak of stateDiffHash and keccak(pubdata). Used by custom DA solutions.
     PubdataKeccak256,
     /// This commitment includes EIP-4844 blobs data. Used by default RollupL1DAValidator.
     /// With ZKsync OS it always outputs 1 0-hash blob, as separate commitment used for blobs.

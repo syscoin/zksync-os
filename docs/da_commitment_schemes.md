@@ -35,7 +35,15 @@ ZKsync OS implements five distinct DA commitment schemes, defined in [`da_commit
 ### 3. PubdataKeccak256 (ID: 2)
 **Purpose**: Custom DA solutions using keccak256
 
-**Status**: Currently not supported
+**Implementation**: [`PubdataKeccak256CommitmentGenerator`](../basic_system/src/system_implementation/system/da_commitment_generator/pubdata_keccak256_commitment_generator.rs)
+
+**Commitment Calculation**:
+```
+da_commitment = keccak256(
+    state_diffs_hash,     // 32 bytes (hash of uncompressed state diffs)
+    pubdata_keccak        // 32 bytes (keccak256 of full pubdata)
+)
+```
 
 **Use Case**: Third-party DA layers (Celestia, Avail, etc.)
 

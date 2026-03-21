@@ -596,7 +596,8 @@ impl<
 // creates one block batch public input
 // currently used for proof input generation
 //
-// With `state-diffs-pi` feature is used for testing, to compare state diffs from forward run and proof run.
+// With `state-diffs-pi` feature we expose state diffs for testing.
+// `PubdataKeccak256` also needs the finalized state diffs hash for DA commitments.
 #[cfg(not(any(feature = "multiblock-batch", feature = "aggregation")))]
 impl<
         A: Allocator + Clone + Default,
@@ -642,23 +643,26 @@ impl<
         ));
 
         // finishing IO, applying changes
+        let da_commitment_scheme = self.da_commitment_scheme.unwrap();
         let mut da_commitment_generator =
-            da_commitment_generator_from_scheme(self.da_commitment_scheme.unwrap(), A::default())
-                .unwrap();
+            da_commitment_generator_from_scheme(da_commitment_scheme, A::default()).unwrap();
 
         // Write version byte first to enable future pubdata format upgrades
         da_commitment_generator.write(&[PUBDATA_ENCODING_VERSION]);
         da_commitment_generator.write(current_block_hash.as_u8_ref());
         da_commitment_generator.write(&block_metadata.timestamp.to_be_bytes());
 
-        let state_diffs_hash = if cfg!(feature = "state-diffs-pi") {
+        let collect_state_diffs =
+            cfg!(feature = "state-diffs-pi") || da_commitment_scheme == DACommitmentScheme::PubdataKeccak256;
+        let state_diffs_hash = if collect_state_diffs {
             self.storage
-                .finish_and_calculate_state_diffs_hash(
+                .finish_and_observe_state_diffs(
                     &mut self.oracle,
                     Some(&mut state_commitment),
                     da_commitment_generator.as_mut(),
                     result_keeper,
                     &mut logger,
+                    |_derived_key, _value| {},
                 )
                 .expect("Failed to finish storage")
         } else {
@@ -673,6 +677,9 @@ impl<
                 .expect("Failed to finish storage");
             Default::default() // Unused
         };
+        if da_commitment_scheme == DACommitmentScheme::PubdataKeccak256 {
+            da_commitment_generator.set_state_diffs_hash(&state_diffs_hash);
+        }
 
         self.logs_storage
             .apply_pubdata(da_commitment_generator.as_mut(), result_keeper);
@@ -708,7 +715,7 @@ impl<
             chain_id: U256::try_from(block_metadata.chain_id).unwrap(),
             first_block_timestamp: block_metadata.timestamp,
             last_block_timestamp: block_metadata.timestamp,
-            da_commitment_scheme: self.da_commitment_scheme.unwrap(),
+            da_commitment_scheme,
             pubdata_commitment: da_commitment_generator.finalize(&mut self.oracle),
             number_of_layer_1_txs: U256::try_from(l1_txs_commitment.0).unwrap(),
             priority_operations_hash: l1_txs_commitment.1,
@@ -824,6 +831,11 @@ where
             builder.da_commitment_generator = Some(
                 da_commitment_generator_from_scheme(da_commitment_scheme, A::default()).unwrap(),
             );
+            builder.state_diffs_hasher = if da_commitment_scheme == DACommitmentScheme::PubdataKeccak256 {
+                Some(Blake2s256::new())
+            } else {
+                None
+            };
         } else {
             assert_eq!(builder.da_commitment_scheme.unwrap(), da_commitment_scheme);
         }
@@ -845,15 +857,33 @@ where
             .unwrap()
             .write(&block_metadata.timestamp.to_be_bytes());
 
-        self.storage
-            .finish(
-                &mut self.oracle,
-                Some(&mut state_commitment),
-                builder.da_commitment_generator.as_mut().unwrap().as_mut(),
-                &mut NopResultKeeper,
-                &mut NullLogger,
-            )
-            .expect("Failed to finish storage");
+        let da_commitment_generator = builder.da_commitment_generator.as_mut().unwrap();
+        if da_commitment_scheme == DACommitmentScheme::PubdataKeccak256 {
+            let state_diffs_hasher = builder.state_diffs_hasher.as_mut().unwrap();
+            self.storage
+                .finish_and_observe_state_diffs(
+                    &mut self.oracle,
+                    Some(&mut state_commitment),
+                    da_commitment_generator.as_mut(),
+                    &mut NopResultKeeper,
+                    &mut NullLogger,
+                    |derived_key, value| {
+                        state_diffs_hasher.update(derived_key.as_u8_ref());
+                        state_diffs_hasher.update(value.as_u8_ref());
+                    },
+                )
+                .expect("Failed to finish storage");
+        } else {
+            self.storage
+                .finish(
+                    &mut self.oracle,
+                    Some(&mut state_commitment),
+                    da_commitment_generator.as_mut(),
+                    &mut NopResultKeeper,
+                    &mut NullLogger,
+                )
+                .expect("Failed to finish storage");
+        }
 
         self.logs_storage.apply_pubdata(
             builder.da_commitment_generator.as_mut().unwrap().as_mut(),
