@@ -178,44 +178,12 @@ pub fn generate_proof_input_from_bytes<T: ReadStorageTree, PS: PreimageSource, T
 /// Important: da_commitment_scheme should correspond to one used for blocks proof input generation.
 ///
 pub fn generate_batch_proof_input(
-    mut blocks_proof_inputs: Vec<&[u32]>,
+    blocks_proof_inputs: Vec<&[u32]>,
     da_commitment_scheme: DACommitmentScheme,
-    blocks_pubdata: Vec<&[u8]>,
+    _blocks_pubdata: Vec<&[u8]>,
 ) -> Vec<u32> {
     let blobs_advice = match da_commitment_scheme {
-        DACommitmentScheme::BlobsZKsyncOS => {
-            let total_pubdata_length: usize = blocks_pubdata
-                .iter()
-                .map(|blocks_pubdata| blocks_pubdata.len())
-                .sum();
-            let mut blobs_data = Vec::with_capacity(total_pubdata_length + 31);
-            blobs_data.extend_from_slice(&(total_pubdata_length as u64).to_be_bytes());
-            blobs_data.extend_from_slice(&[0u8; 23]); // pad to 31
-            for (i, block_pubdata) in blocks_pubdata.into_iter().enumerate() {
-                blobs_data.extend_from_slice(block_pubdata);
-                let length_without_advice = blocks_proof_inputs[i].len()
-                    - (block_pubdata.len() + 31).div_ceil(31 * 4096) * 25;
-                blocks_proof_inputs[i] = &blocks_proof_inputs[i][..length_without_advice];
-            }
-            let mut blobs_advice = Vec::with_capacity(25 * blobs_data.len().div_ceil(31 * 4096));
-            for blob_data in blobs_data.chunks(31 * 4096) {
-                let advice =
-                    callable_oracles::blob_kzg_commitment::blob_kzg_commitment_and_proof(blob_data);
-                blobs_advice.push(24);
-                for word in advice.iter() {
-                    #[cfg(target_pointer_width = "32")]
-                    blobs_advice.push(word as u32);
-                    #[cfg(target_pointer_width = "64")]
-                    {
-                        let low = word as u32;
-                        let high = (word >> 32) as u32;
-                        blobs_advice.push(low);
-                        blobs_advice.push(high);
-                    }
-                }
-            }
-            blobs_advice
-        }
+        DACommitmentScheme::BlobsZKsyncOS => vec![],
         _ => vec![],
     };
     let mut proof_input = Vec::with_capacity(

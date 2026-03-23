@@ -147,14 +147,41 @@ impl<
         result_keeper: &mut impl IOResultKeeper<Self::IOTypes>,
         logger: &mut impl Logger,
     ) -> Result<Bytes32, InternalError> {
-        self.finish_and_observe_state_diffs(
-            oracle,
-            state_commitment,
-            pubdata_dst,
-            result_keeper,
-            logger,
-            |_derived_key, _value| {},
-        )
+        // First complete the normal storage finalization process
+        let storage_cache =
+        self.finish_internal(oracle, state_commitment, pubdata_dst, result_keeper, logger)?;
+
+        let mut hasher = crypto::blake2s::Blake2s256::new();
+        let mut state_diffs_hasher = crypto::blake2s::Blake2s256::new();
+
+        // Iterate through all modified storage entries and hash them deterministically
+        storage_cache
+        .0
+        .cache
+        .apply_to_all_updated_elements::<_, ()>(|l, r, k| {
+            // Skip entries where the value didn't actually change
+            if l.value() == r.value() {
+                return Ok(());
+            }
+            let derived_key =
+                derive_flat_storage_key_with_hasher(&k.address, &k.key, &mut hasher);
+
+            logger
+                .write_fmt(format_args!(
+                    "State diffs hash - key: {:?}, new value: {:?}\n",
+                    derived_key,
+                    r.value()
+                ))
+                .ok();
+
+            // Hash the derived key and new value together to create deterministic state diff hash
+            state_diffs_hasher.update(derived_key.as_u8_ref());
+            state_diffs_hasher.update(r.value().as_u8_ref());
+            Ok(())
+        })
+        .map_err(|_| internal_error!("Failed to compute state diffs hash"))?;
+
+        Ok(state_diffs_hasher.finalize().into())
     }
 
     fn storage_read(
@@ -582,49 +609,6 @@ impl<
         })?;
 
         Ok(storage_cache)
-    }
-
-    pub(crate) fn finish_and_observe_state_diffs<T: WriteBytes + ?Sized>(
-        self,
-        oracle: &mut impl IOOracle,
-        state_commitment: Option<&mut <Self as StorageModel>::StorageCommitment>,
-        pubdata_dst: &mut T,
-        result_keeper: &mut impl IOResultKeeper<<Self as StorageModel>::IOTypes>,
-        logger: &mut impl Logger,
-        mut observer: impl FnMut(Bytes32, Bytes32),
-    ) -> Result<Bytes32, InternalError> {
-        let storage_cache =
-            self.finish_internal(oracle, state_commitment, pubdata_dst, result_keeper, logger)?;
-
-        let mut hasher = crypto::blake2s::Blake2s256::new();
-        let mut state_diffs_hasher = crypto::blake2s::Blake2s256::new();
-
-        storage_cache
-            .0
-            .cache
-            .apply_to_all_updated_elements::<_, ()>(|l, r, k| {
-                if l.value() == r.value() {
-                    return Ok(());
-                }
-                let derived_key =
-                    derive_flat_storage_key_with_hasher(&k.address, &k.key, &mut hasher);
-
-                logger
-                    .write_fmt(format_args!(
-                        "State diffs hash - key: {:?}, new value: {:?}\n",
-                        derived_key,
-                        r.value()
-                    ))
-                    .ok();
-
-                state_diffs_hasher.update(derived_key.as_u8_ref());
-                state_diffs_hasher.update(r.value().as_u8_ref());
-                observer(derived_key, *r.value());
-                Ok(())
-            })
-            .map_err(|_| internal_error!("Failed to compute state diffs hash"))?;
-
-        Ok(state_diffs_hasher.finalize().into())
     }
 }
 

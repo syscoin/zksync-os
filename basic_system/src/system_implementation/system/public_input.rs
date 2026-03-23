@@ -215,7 +215,6 @@ pub struct BatchPublicInputBuilder<A: alloc::alloc::Allocator, O: IOOracle> {
     chain_id: Option<U256>,
     pub da_commitment_scheme: Option<DACommitmentScheme>,
     pub da_commitment_generator: Option<alloc::boxed::Box<dyn DACommitmentGenerator<O>, A>>,
-    pub state_diffs_hasher: Option<Blake2s256>,
     pub logs_storage: ArrayVec<Bytes32, 16384>,
     pub number_of_layer_1_txs: U256,
     pub l1_txs_rolling_hash: Bytes32,
@@ -233,7 +232,6 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> BatchPublicInputBuilder<A, O> {
             chain_id: None,
             da_commitment_generator: None,
             da_commitment_scheme: None,
-            state_diffs_hasher: None,
             logs_storage: ArrayVec::new(),
             number_of_layer_1_txs: U256::ZERO,
             // keccak256([])
@@ -290,14 +288,6 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> BatchPublicInputBuilder<A, O> {
         let full_l2_to_l1_logs_root = full_root_hasher.finalize();
 
         let mut da_commitment_generator = self.da_commitment_generator.unwrap();
-        if self.da_commitment_scheme == Some(DACommitmentScheme::PubdataKeccak256) {
-            let state_diffs_hash: Bytes32 = self
-                .state_diffs_hasher
-                .unwrap_or_else(Blake2s256::new)
-                .finalize()
-                .into();
-            da_commitment_generator.set_state_diffs_hash(&state_diffs_hash);
-        }
 
         let batch_output = public_input::BatchOutput {
             chain_id: self.chain_id.unwrap(),
