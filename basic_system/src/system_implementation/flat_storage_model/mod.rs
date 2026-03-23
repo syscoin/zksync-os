@@ -156,30 +156,30 @@ impl<
 
         // Iterate through all modified storage entries and hash them deterministically
         storage_cache
-        .0
-        .cache
-        .apply_to_all_updated_elements::<_, ()>(|l, r, k| {
-            // Skip entries where the value didn't actually change
-            if l.value() == r.value() {
-                return Ok(());
-            }
-            let derived_key =
-                derive_flat_storage_key_with_hasher(&k.address, &k.key, &mut hasher);
+            .0
+            .cache
+            .apply_to_all_updated_elements::<_, ()>(|l, r, k| {
+                // Skip entries where the value didn't actually change
+                if l.value() == r.value() {
+                    return Ok(());
+                }
+                let derived_key =
+                    derive_flat_storage_key_with_hasher(&k.address, &k.key, &mut hasher);
 
-            logger
-                .write_fmt(format_args!(
-                    "State diffs hash - key: {:?}, new value: {:?}\n",
-                    derived_key,
-                    r.value()
-                ))
-                .ok();
+                logger
+                    .write_fmt(format_args!(
+                        "State diffs hash - key: {:?}, new value: {:?}\n",
+                        derived_key,
+                        r.value()
+                    ))
+                    .ok();
 
-            // Hash the derived key and new value together to create deterministic state diff hash
-            state_diffs_hasher.update(derived_key.as_u8_ref());
-            state_diffs_hasher.update(r.value().as_u8_ref());
-            Ok(())
-        })
-        .map_err(|_| internal_error!("Failed to compute state diffs hash"))?;
+                // Hash the derived key and new value together to create deterministic state diff hash
+                state_diffs_hasher.update(derived_key.as_u8_ref());
+                state_diffs_hasher.update(r.value().as_u8_ref());
+                Ok(())
+            })
+            .map_err(|_| internal_error!("Failed to compute state diffs hash"))?;
 
         Ok(state_diffs_hasher.finalize().into())
     }

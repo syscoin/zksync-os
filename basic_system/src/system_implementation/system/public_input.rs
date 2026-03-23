@@ -1,7 +1,6 @@
 use crate::system_implementation::system::da_commitment_generator::DACommitmentGenerator;
 use crate::system_implementation::system::public_input;
 use arrayvec::ArrayVec;
-use crypto::blake2s::Blake2s256;
 use crypto::sha3::Keccak256;
 use crypto::MiniDigest;
 use ruint::aliases::U256;
@@ -287,14 +286,12 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> BatchPublicInputBuilder<A, O> {
         full_root_hasher.update([0u8; 32]); // aggregated root 0 for now
         let full_l2_to_l1_logs_root = full_root_hasher.finalize();
 
-        let mut da_commitment_generator = self.da_commitment_generator.unwrap();
-
         let batch_output = public_input::BatchOutput {
             chain_id: self.chain_id.unwrap(),
             first_block_timestamp: self.first_block_timestamp.unwrap(),
             last_block_timestamp: self.current_block_timestamp.unwrap(),
             da_commitment_scheme: self.da_commitment_scheme.unwrap(),
-            pubdata_commitment: da_commitment_generator.finalize(oracle),
+            pubdata_commitment: self.da_commitment_generator.unwrap().finalize(oracle),
             number_of_layer_1_txs: self.number_of_layer_1_txs,
             priority_operations_hash: self.l1_txs_rolling_hash,
             l2_logs_tree_root: full_l2_to_l1_logs_root.into(),

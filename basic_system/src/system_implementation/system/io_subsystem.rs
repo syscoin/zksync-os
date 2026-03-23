@@ -596,7 +596,7 @@ impl<
 // creates one block batch public input
 // currently used for proof input generation
 //
-// With `state-diffs-pi` feature we expose state diffs for testing.
+// With `state-diffs-pi` feature is used for testing, to compare state diffs from forward run and proof run.
 #[cfg(not(any(feature = "multiblock-batch", feature = "aggregation")))]
 impl<
         A: Allocator + Clone + Default,
@@ -642,9 +642,9 @@ impl<
         ));
 
         // finishing IO, applying changes
-        let da_commitment_scheme = self.da_commitment_scheme.unwrap();
         let mut da_commitment_generator =
-            da_commitment_generator_from_scheme(da_commitment_scheme, A::default()).unwrap();
+            da_commitment_generator_from_scheme(self.da_commitment_scheme.unwrap(), A::default())
+                .unwrap();
 
         // Write version byte first to enable future pubdata format upgrades
         da_commitment_generator.write(&[PUBDATA_ENCODING_VERSION]);
@@ -673,6 +673,7 @@ impl<
                 .expect("Failed to finish storage");
             Default::default() // Unused
         };
+
         self.logs_storage
             .apply_pubdata(da_commitment_generator.as_mut(), result_keeper);
         result_keeper.logs(self.logs_storage.messages_ref_iter());

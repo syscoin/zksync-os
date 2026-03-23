@@ -35,15 +35,7 @@ ZKsync OS implements five distinct DA commitment schemes, defined in [`da_commit
 ### 3. PubdataKeccak256 (ID: 2)
 **Purpose**: Custom DA solutions using keccak256
 
-**Implementation**: [`PubdataKeccak256CommitmentGenerator`](../basic_system/src/system_implementation/system/da_commitment_generator/pubdata_keccak256_commitment_generator.rs)
-
-**Commitment Calculation**:
-```
-da_commitment = keccak256(
-    state_diffs_hash,     // 32 bytes (hash of uncompressed state diffs)
-    pubdata_keccak        // 32 bytes (keccak256 of full pubdata)
-)
-```
+**Status**: Currently not supported
 
 **Use Case**: Third-party DA layers (Celestia, Avail, etc.)
 
@@ -73,7 +65,7 @@ da_commitment = keccak256(
 - State diffs hash is zero-filled as legacy compatibility requirement
 
 ### 5. BlobsZKsyncOS (ID: 4)
-**Purpose**: EIP-4844 blob-based DA with optimal cost efficiency
+**Purpose**: Chunked DA commitment mode backed by Syscoin DA in this fork
 
 **Implementation**: [`BlobCommitmentGenerator`](../basic_system/src/system_implementation/system/da_commitment_generator/blob_commitment_generator/mod.rs)
 
@@ -93,23 +85,15 @@ da_commitment = keccak256(
 
 **Commitment Calculation**:
 ```
-For each blob:
-  1. Generate KZG commitment and proof
-  2. Calculate versioned_hash = keccak256(0x01 || kzg_commitment)
-  3. Verify KZG proof using polynomial evaluation
+For each encoded chunk:
+  1. Compute chunk_id = keccak256(chunk_bytes)
 
-final_commitment = keccak256(all_versioned_hashes)
+final_commitment = keccak256(all_chunk_ids)
 ```
 
-**Polynomial Evaluation**:
-- Uses BLS12-381 curve arithmetic
-- Evaluation point derived from `blake2s(versioned_hash || blob_data)` (truncated to 128 bits)
-- Supports polynomial interpolation over the blob data
-
 **Use Case**:
-- EIP-4844 enabled Ethereum rollups
-- Cost-optimized for large amounts of pubdata
-- Up to ~90% cost reduction compared to calldata
+- Syscoin-backed DA for chunked pubdata publication
+- Cost-optimized for large amounts of pubdata in this fork
 
 ## DA Commitment Generation Process
 
