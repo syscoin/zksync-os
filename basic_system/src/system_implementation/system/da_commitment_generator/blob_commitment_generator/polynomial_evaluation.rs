@@ -1,6 +1,7 @@
 use super::brp_roots_of_unity::BRP_ROOTS_OF_UNITY;
 use super::*;
 use core::mem::MaybeUninit;
+use crypto::ark_ff::{Field, One, Zero};
 
 ///
 /// Evaluate blob polynomial in the given point.
