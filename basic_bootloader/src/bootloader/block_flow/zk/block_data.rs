@@ -1,3 +1,4 @@
+use arrayvec::ArrayVec;
 use crypto::MiniDigest;
 use zk_ee::utils::Bytes32;
 
@@ -21,6 +22,8 @@ pub struct ZKBasicBlockDataKeeper<EA: TxHashesAccumulator> {
     pub block_computational_native_used: u64,
     /// Amount of blob gas used in the block
     pub block_blob_gas_used: u64,
+    /// SYSCOIN: accepted transaction numbers allowed to emit compact edge DA refs.
+    pub syscoin_compact_edge_da_ref_tx_numbers: ArrayVec<u32, 16384>,
 }
 
 impl<EA: TxHashesAccumulator> ZKBasicBlockDataKeeper<EA> {
@@ -36,6 +39,7 @@ impl<EA: TxHashesAccumulator> ZKBasicBlockDataKeeper<EA> {
             block_pubdata_used: 0,
             block_computational_native_used: 0,
             block_blob_gas_used: 0,
+            syscoin_compact_edge_da_ref_tx_numbers: ArrayVec::new(),
         }
     }
 }

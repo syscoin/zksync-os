@@ -129,6 +129,12 @@ pub struct BlockMetadataFromOracle {
     /// of prevRandao.
     pub mix_hash: U256,
     pub blob_fee: U256,
+    /// Canonical settlement-layer upgrade tx hash for this block's upgrade batch.
+    /// Zero when the block is not the upgrade block.
+    pub canonical_upgrade_tx_hash: Bytes32,
+    /// SYSCOIN: Gateway validator timelock target authorized to carry compact edge DA refs.
+    /// Zero disables compact edge DA ref collection.
+    pub syscoin_compact_edge_da_commit_target: B160,
 }
 
 impl BasicBlockMetadata<EthereumIOTypesConfig> for BlockMetadataFromOracle {
@@ -217,6 +223,8 @@ impl BlockMetadataFromOracle {
             block_hashes: BlockHashes::default(),
             mix_hash: U256::ONE,
             blob_fee: U256::ZERO,
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
+            syscoin_compact_edge_da_commit_target: B160::ZERO,
         }
     }
 }
@@ -225,7 +233,9 @@ impl UsizeSerializable for BlockMetadataFromOracle {
     const USIZE_LEN: usize = <U256 as UsizeSerializable>::USIZE_LEN
         * (5 + BLOCK_HASHES_WINDOW_SIZE)
         + <u64 as UsizeSerializable>::USIZE_LEN * 5
-        + <B160 as UsizeDeserializable>::USIZE_LEN;
+        + <B160 as UsizeDeserializable>::USIZE_LEN
+        + <Bytes32 as UsizeSerializable>::USIZE_LEN
+        + <B160 as UsizeSerializable>::USIZE_LEN;
 
     fn iter(&self) -> impl ExactSizeIterator<Item = usize> {
         ExactSizeChain::new(
@@ -239,28 +249,38 @@ impl UsizeSerializable for BlockMetadataFromOracle {
                                         ExactSizeChain::new(
                                             ExactSizeChain::new(
                                                 ExactSizeChain::new(
-                                                    UsizeSerializable::iter(&self.eip1559_basefee),
-                                                    UsizeSerializable::iter(&self.pubdata_price),
+                                                    ExactSizeChain::new(
+                                                        UsizeSerializable::iter(
+                                                            &self.eip1559_basefee,
+                                                        ),
+                                                        UsizeSerializable::iter(
+                                                            &self.pubdata_price,
+                                                        ),
+                                                    ),
+                                                    UsizeSerializable::iter(&self.native_price),
                                                 ),
-                                                UsizeSerializable::iter(&self.native_price),
+                                                UsizeSerializable::iter(&self.block_number),
                                             ),
-                                            UsizeSerializable::iter(&self.block_number),
+                                            UsizeSerializable::iter(&self.timestamp),
                                         ),
-                                        UsizeSerializable::iter(&self.timestamp),
+                                        UsizeSerializable::iter(&self.chain_id),
                                     ),
-                                    UsizeSerializable::iter(&self.chain_id),
+                                    UsizeSerializable::iter(&self.gas_limit),
                                 ),
-                                UsizeSerializable::iter(&self.gas_limit),
+                                UsizeSerializable::iter(&self.pubdata_limit),
                             ),
-                            UsizeSerializable::iter(&self.pubdata_limit),
+                            UsizeSerializable::iter(&self.coinbase),
                         ),
-                        UsizeSerializable::iter(&self.coinbase),
+                        UsizeSerializable::iter(&self.block_hashes),
                     ),
-                    UsizeSerializable::iter(&self.block_hashes),
+                    UsizeSerializable::iter(&self.mix_hash),
                 ),
-                UsizeSerializable::iter(&self.mix_hash),
+                UsizeSerializable::iter(&self.blob_fee),
             ),
-            UsizeSerializable::iter(&self.blob_fee),
+            ExactSizeChain::new(
+                UsizeSerializable::iter(&self.canonical_upgrade_tx_hash),
+                UsizeSerializable::iter(&self.syscoin_compact_edge_da_commit_target),
+            ),
         )
     }
 }
@@ -281,6 +301,8 @@ impl UsizeDeserializable for BlockMetadataFromOracle {
         let block_hashes = UsizeDeserializable::from_iter(src)?;
         let mix_hash = UsizeDeserializable::from_iter(src)?;
         let blob_fee = UsizeDeserializable::from_iter(src)?;
+        let canonical_upgrade_tx_hash = UsizeDeserializable::from_iter(src)?;
+        let syscoin_compact_edge_da_commit_target = UsizeDeserializable::from_iter(src)?;
 
         let new = Self {
             eip1559_basefee,
@@ -295,6 +317,8 @@ impl UsizeDeserializable for BlockMetadataFromOracle {
             block_hashes,
             mix_hash,
             blob_fee,
+            canonical_upgrade_tx_hash,
+            syscoin_compact_edge_da_commit_target,
         };
 
         Ok(new)

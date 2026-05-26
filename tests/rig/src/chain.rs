@@ -429,6 +429,8 @@ impl<const RANDOMIZED_TREE: bool> Chain<RANDOMIZED_TREE> {
             pubdata_limit: block_context.pubdata_limit,
             mix_hash: block_context.mix_hash,
             blob_fee: block_context.blob_fee,
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
+            syscoin_compact_edge_da_commit_target: ruint::aliases::B160::ZERO,
         };
         let tx_source = TxListSource {
             transactions: transactions.into(),
@@ -620,6 +622,8 @@ impl<const RANDOMIZED_TREE: bool> Chain<RANDOMIZED_TREE> {
             pubdata_limit: block_context.pubdata_limit,
             mix_hash: block_context.mix_hash,
             blob_fee: block_context.blob_fee,
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
+            syscoin_compact_edge_da_commit_target: ruint::aliases::B160::ZERO,
         };
         let state_commitment = FlatStorageCommitment::<{ TREE_HEIGHT }> {
             root: *self.state_tree.storage_tree.root(),

@@ -6,12 +6,39 @@ use crate::post_check::post_check;
 use crate::prestate::{populate_prestate, DiffTrace, PrestateTrace};
 use crate::receipts::{BlockReceipts, TransactionReceipt};
 use rig::log::info;
+// SYSCOIN: benchmark block replay must be able to force the production DA scheme.
+use rig::zk_ee::common_structs::DACommitmentScheme;
 use rig::*;
 use std::fs::{self, File};
 use std::io::BufReader;
 use zk_ee::system::tracer::NopTracer;
 use zk_ee::system::validator::NopTxValidator;
 use zksync_os_interface::traits::EncodedTx;
+
+// SYSCOIN: keep DA scheme selection explicit for apples-to-apples benchmarks.
+fn parse_da_commitment_scheme(value: Option<String>) -> anyhow::Result<Option<DACommitmentScheme>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let scheme = match value.as_str() {
+        "None" | "none" | "0" => DACommitmentScheme::None,
+        "EmptyNoDA" | "empty-no-da" | "empty_no_da" | "1" => DACommitmentScheme::EmptyNoDA,
+        "PubdataKeccak256" | "pubdata-keccak256" | "pubdata_keccak256" | "2" => {
+            DACommitmentScheme::PubdataKeccak256
+        }
+        "BlobsAndPubdataKeccak256"
+        | "blobs-and-pubdata-keccak256"
+        | "blobs_and_pubdata_keccak256"
+        | "3" => DACommitmentScheme::BlobsAndPubdataKeccak256,
+        "BlobsZKsyncOS" | "blobs-zksync-os" | "blobs_zksync_os" | "4" => {
+            DACommitmentScheme::BlobsZKsyncOS
+        }
+        _ => anyhow::bail!("unsupported DA commitment scheme: {value}"),
+    };
+
+    Ok(Some(scheme))
+}
 
 #[allow(clippy::too_many_arguments)]
 fn run<const RANDOMIZED: bool>(
@@ -25,6 +52,8 @@ fn run<const RANDOMIZED: bool>(
     diff_trace: DiffTrace,
     calltrace: CallTrace,
     block_hashes: Option<BlockHashes>,
+    // SYSCOIN: override eth_runner's legacy default DA mode when benchmarking edge blocks.
+    da_commitment_scheme: Option<DACommitmentScheme>,
     witness_output_dir: Option<String>,
     flamegraph: Option<String>,
 ) -> anyhow::Result<()> {
@@ -58,7 +87,8 @@ fn run<const RANDOMIZED: bool>(
         .run_block_with_extra_stats(
             transactions,
             Some(block_context),
-            None,
+            // SYSCOIN: force the same DA commitment scheme on upstream and Syscoin branches.
+            da_commitment_scheme,
             Some(run_config),
             &mut NopTracer::default(),
             &mut NopTxValidator::default(),
@@ -79,6 +109,8 @@ pub fn single_run(
     witness_output_dir: Option<String>,
     chain_id: Option<u64>,
     single_tx: Option<u64>,
+    // SYSCOIN: CLI override used by bench_scripts/bench.sh.
+    da_commitment_scheme: Option<String>,
     flamegraph: Option<String>,
 ) -> anyhow::Result<()> {
     use std::path::Path;
@@ -116,6 +148,8 @@ pub fn single_run(
 
     let block_context = block.get_block_context();
     let (transactions, skipped, _) = block.get_transactions(&calltrace, single_tx);
+    // SYSCOIN: parse after loading the fixture so unsupported values fail before execution.
+    let da_commitment_scheme = parse_da_commitment_scheme(da_commitment_scheme)?;
 
     let receipts = receipts
         .result
@@ -164,6 +198,8 @@ pub fn single_run(
             diff_trace,
             calltrace,
             block_hashes,
+            // SYSCOIN: run randomized block replay with the requested DA mode.
+            da_commitment_scheme,
             witness_output_dir,
             flamegraph,
         )
@@ -180,6 +216,8 @@ pub fn single_run(
             diff_trace,
             calltrace,
             block_hashes,
+            // SYSCOIN: run deterministic block replay with the requested DA mode.
+            da_commitment_scheme,
             witness_output_dir,
             flamegraph,
         )

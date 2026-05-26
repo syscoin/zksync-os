@@ -13,6 +13,8 @@ FEATURES="rig/no_print,rig/cycle_marker,rig/unlimited_native"
 PRECOMPILE_FEATURES="rig/no_print,precompiles/cycle_marker,rig/unlimited_native"
 ETH_RUNNER_MANIFEST="$REPO_ROOT/tests/instances/eth_runner/Cargo.toml"
 PRECOMPILE_MANIFEST="$REPO_ROOT/tests/instances/precompiles/Cargo.toml"
+# SYSCOIN: default block replay benchmarks to the production edge-chain DA mode.
+DA_COMMITMENT_SCHEME="${DA_COMMITMENT_SCHEME:-BlobsZKsyncOS}"
 
 usage() {
     cat <<'EOF'
@@ -26,6 +28,9 @@ Commands:
   flamegraph [path.svg]  Build RISC-V binary, run 1 block, produce flamegraph SVG
 
 Results are saved to bench_results/ at the repo root.
+
+Environment:
+  DA_COMMITMENT_SCHEME   DA scheme for eth_runner block replay (default: BlobsZKsyncOS)
 EOF
     exit 1
 }
@@ -42,12 +47,13 @@ run_block() {
     blk="$(basename "$block_dir")"
 
     echo "==> Benchmarking block $blk..."
+    # SYSCOIN: force apples-to-apples DA mode across upstream and Syscoin branches.
     ZKSYNC_RISC_V_RUN=true \
     MARKER_PATH="$output_dir/block_${blk}.bench" \
     cargo run --manifest-path "$ETH_RUNNER_MANIFEST" \
         --release -j 3 \
         --features "$FEATURES" \
-        -- single-run --block-dir "$block_dir" \
+        -- single-run --block-dir "$block_dir" --da-commitment-scheme "$DA_COMMITMENT_SCHEME" \
         > "$output_dir/block_${blk}.out" 2>&1
 }
 
@@ -151,11 +157,12 @@ do_flamegraph() {
     build_riscv_binary
 
     echo "==> Generating flamegraph for block $QUICK_BLOCK..."
+    # SYSCOIN: flamegraphs should use the same DA mode as numeric benchmarks.
     ZKSYNC_RISC_V_RUN=true \
     cargo run --manifest-path "$ETH_RUNNER_MANIFEST" \
         --release -j 3 \
         --features "$FEATURES" \
-        -- single-run --block-dir "$BLOCKS_DIR/$QUICK_BLOCK" \
+        -- single-run --block-dir "$BLOCKS_DIR/$QUICK_BLOCK" --da-commitment-scheme "$DA_COMMITMENT_SCHEME" \
         --flamegraph "$output_svg"
 
     echo "==> Generating text summary..."

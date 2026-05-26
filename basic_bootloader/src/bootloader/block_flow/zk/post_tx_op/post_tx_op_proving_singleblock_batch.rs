@@ -110,7 +110,21 @@ where
         if !block_data.upgrade_tx_recorder.is_empty() {
             number_of_layer_2_txs -= 1;
         }
-        let upgrade_tx_hash = block_data.upgrade_tx_recorder.finish();
+        let recorded_upgrade_tx_hash = block_data.upgrade_tx_recorder.finish();
+        let canonical_upgrade_tx_hash = metadata.block_level.canonical_upgrade_tx_hash;
+        // SYSCOIN: canonical metadata may only replace an empty recorder hash
+        // (patch-only upgrade) or the same hash that execution recorded.
+        assert!(
+            canonical_upgrade_tx_hash == Bytes32::ZERO
+                || recorded_upgrade_tx_hash == Bytes32::ZERO
+                || recorded_upgrade_tx_hash == canonical_upgrade_tx_hash,
+            "canonical upgrade tx hash mismatch"
+        );
+        let upgrade_tx_hash = if canonical_upgrade_tx_hash == Bytes32::ZERO {
+            recorded_upgrade_tx_hash
+        } else {
+            canonical_upgrade_tx_hash
+        };
         let interop_roots_rolling_hash = calculate_interop_roots_rolling_hash(
             Bytes32::zero(),
             io.interop_root_storage.iter(),
@@ -195,6 +209,10 @@ where
             upgrade_tx_hash,
             interop_roots_rolling_hash,
             settlement_layer_chain_id,
+            // SYSCOIN: derive compact edge DA refs only from the authorized Gateway commit tx.
+            edge_da_refs_root: io.logs_storage.syscoin_edge_da_refs_root_for_tx_numbers(
+                &block_data.syscoin_compact_edge_da_ref_tx_numbers,
+            ),
         };
         logger_log!(logger, "PI calculation: batch output {:?}\n", batch_output,);
 

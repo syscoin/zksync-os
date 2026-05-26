@@ -21,8 +21,8 @@ use core::fmt::Write;
 use errors::cascade::CascadedError;
 use errors::root_cause::RootCause;
 use metadata::basic_metadata::{BasicMetadata, ZkSpecificPricingMetadata};
-use metadata::zk_metadata::TxLevelMetadata;
-use ruint::aliases::U256;
+use metadata::zk_metadata::{TxLevelMetadata, ZkMetadata};
+use ruint::aliases::{B160, U256};
 use zk_ee::common_structs::system_hooks::HooksStorage;
 use zk_ee::execution_environment_type::ExecutionEnvironmentType;
 use zk_ee::system::errors::interface::InterfaceError;
@@ -61,6 +61,8 @@ pub struct ZkTxResult<'a> {
     pub native_used: u64,
     pub pubdata_used: u64,
     pub blob_gas_used: u64,
+    /// SYSCOIN: true only for the authorized Gateway child-chain commit transaction.
+    pub collects_syscoin_edge_da_refs: bool,
 }
 
 impl<'a> MinimalTransactionOutput<'a> for ZkTxResult<'a> {
@@ -179,7 +181,8 @@ impl<S: EthereumLikeTypes> core::fmt::Debug for CachedPubdataInfo<S> {
     }
 }
 
-impl<S: EthereumLikeTypes> BasicTransactionFlow<S> for ZkTransactionFlowOnlyEOA<S>
+impl<S: EthereumLikeTypes<Metadata = ZkMetadata>> BasicTransactionFlow<S>
+    for ZkTransactionFlowOnlyEOA<S>
 where
     S::IO: IOSubsystemExt,
     S::Metadata: ZkSpecificPricingMetadata
@@ -587,6 +590,9 @@ where
             transaction.is_service(),
         );
 
+        let collects_syscoin_edge_da_refs =
+            is_authorized_syscoin_edge_da_ref_commit_tx(system, &transaction);
+
         ZkTxResult {
             result,
             tx_hash: context.tx_hash,
@@ -599,6 +605,7 @@ where
             computational_native_used,
             pubdata_used: context.total_pubdata + intrinsic_pubdata,
             blob_gas_used,
+            collects_syscoin_edge_da_refs,
         }
     }
 
@@ -628,7 +635,31 @@ where
     }
 }
 
-impl<S: EthereumLikeTypes> ZkTransactionFlowOnlyEOA<S>
+const SYSCOIN_COMMIT_BATCHES_SHARED_BRIDGE_SELECTOR: [u8; 4] = [0x0d, 0xb9, 0xeb, 0x87];
+const SYSCOIN_COMMIT_BATCHES_MULTISIG_SELECTOR: [u8; 4] = [0x09, 0x13, 0x14, 0x8a];
+
+fn is_authorized_syscoin_edge_da_ref_commit_tx<S: EthereumLikeTypes<Metadata = ZkMetadata>>(
+    system: &System<S>,
+    transaction: &Transaction<S::Allocator>,
+) -> bool {
+    // SYSCOIN: compact edge DA refs are settlement-critical, so the proven root
+    // only follows child-chain commit transactions sent to the configured Gateway
+    // validator timelock target.
+    let target = system
+        .metadata
+        .block_level
+        .syscoin_compact_edge_da_commit_target;
+    if target == B160::ZERO || transaction.to() != Some(target) {
+        return false;
+    }
+
+    let calldata = transaction.calldata();
+    calldata.len() >= 4
+        && (calldata[..4] == SYSCOIN_COMMIT_BATCHES_SHARED_BRIDGE_SELECTOR
+            || calldata[..4] == SYSCOIN_COMMIT_BATCHES_MULTISIG_SELECTOR)
+}
+
+impl<S: EthereumLikeTypes<Metadata = ZkMetadata>> ZkTransactionFlowOnlyEOA<S>
 where
     S::IO: IOSubsystemExt,
     S::Metadata: ZkSpecificPricingMetadata

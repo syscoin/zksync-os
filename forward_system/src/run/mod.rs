@@ -48,6 +48,14 @@ use zk_ee::wrap_error;
 use zksync_os_interface::traits::EncodedTx;
 
 use std::path::PathBuf;
+// SYSCOIN: must match the patched ZKsync OS blob commitment chunk size.
+const SYSCOIN_DA_BYTES_PER_BLOB: usize = 2 * 1024 * 1024;
+const SYSCOIN_DA_LENGTH_PREFIX_BYTES: usize = 31;
+
+fn syscoin_da_blob_count(pubdata_len: usize) -> usize {
+    (pubdata_len + SYSCOIN_DA_LENGTH_PREFIX_BYTES).div_ceil(SYSCOIN_DA_BYTES_PER_BLOB)
+}
+
 pub use tx_result_callback::TxResultCallback;
 pub use tx_source::NextTxResponse;
 pub use tx_source::TxSource;
@@ -201,15 +209,19 @@ pub fn generate_batch_proof_input(
             blobs_data.extend_from_slice(&[0u8; 23]); // pad to 31
             for (i, block_pubdata) in blocks_pubdata.into_iter().enumerate() {
                 blobs_data.extend_from_slice(block_pubdata);
-                let length_without_advice = blocks_proof_inputs[i].len()
-                    - (block_pubdata.len() + 31).div_ceil(31 * 4096) * 25;
+                let length_without_advice =
+                    blocks_proof_inputs[i].len() - syscoin_da_blob_count(block_pubdata.len()) * 9;
                 blocks_proof_inputs[i] = &blocks_proof_inputs[i][..length_without_advice];
             }
-            let mut blobs_advice = Vec::with_capacity(25 * blobs_data.len().div_ceil(31 * 4096));
-            for blob_data in blobs_data.chunks(31 * 4096) {
+            let blob_count = syscoin_da_blob_count(total_pubdata_length);
+            let mut blobs_advice = Vec::with_capacity(9 * blob_count);
+            for blob_data in blobs_data
+                .chunks(SYSCOIN_DA_BYTES_PER_BLOB)
+                .take(blob_count)
+            {
                 let advice =
                     callable_oracles::blob_kzg_commitment::blob_kzg_commitment_and_proof(blob_data);
-                blobs_advice.push(24);
+                blobs_advice.push(8);
                 for word in advice.iter() {
                     #[cfg(target_pointer_width = "32")]
                     blobs_advice.push(word as u32);

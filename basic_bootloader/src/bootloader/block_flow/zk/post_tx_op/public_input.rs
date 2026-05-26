@@ -77,6 +77,8 @@ pub struct BatchOutput {
     pub interop_roots_rolling_hash: Bytes32,
     /// Settlement layer chain id.
     pub settlement_layer_chain_id: U256,
+    /// SYSCOIN: root of compact edge DA refs emitted by chains settling to Gateway.
+    pub edge_da_refs_root: Bytes32,
 }
 
 impl BatchOutput {
@@ -99,6 +101,8 @@ impl BatchOutput {
         hasher.update(self.upgrade_tx_hash.as_u8_ref());
         hasher.update(self.interop_roots_rolling_hash.as_u8_ref());
         hasher.update(self.settlement_layer_chain_id.to_be_bytes::<32>());
+        // SYSCOIN: bind compact edge DA refs into the proven Gateway batch output.
+        hasher.update(self.edge_da_refs_root.as_u8_ref());
         hasher.finalize()
     }
 }

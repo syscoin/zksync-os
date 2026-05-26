@@ -7900,7 +7900,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-revm?rev=237fd5a#237fd5a5a97468443a47d658298efd420d3e63d8"
+source = "git+https://github.com/matter-labs/zksync-os-revm?rev=e664bfc9b6dbfe8cff1f7a069437f3116fefadc7#e664bfc9b6dbfe8cff1f7a069437f3116fefadc7"
 dependencies = [
  "auto_impl",
  "revm",
@@ -7927,15 +7927,15 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_evm_errors"
-version = "0.0.14"
+version = "0.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d11a0784093ae6b84a29c91617f203264c31dd2cdb2c250a134f5209c1abf9f7"
+checksum = "a7e143e8ed5c5b99fece20b77ebef0f0314a349b74c9a788b823e170a68df1de"
 
 [[package]]
 name = "zksync_os_interface"
-version = "0.0.14"
+version = "0.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f39e007e7bb8439476cc72ed4d20d9c1309ba42589efd28271523fb7fad67fc"
+checksum = "4d8ec5e64c8977a3c70cf276acf052723c20e054dbba0005966081c080fea4a3"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",

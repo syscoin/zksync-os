@@ -69,6 +69,10 @@ enum Command {
         chain_id: Option<u64>,
         #[arg(long)]
         single_tx: Option<u64>,
+        // SYSCOIN: allow benchmarks to force the edge-chain DA mode used in production.
+        /// DA commitment scheme to use for the proving run.
+        #[arg(long)]
+        da_commitment_scheme: Option<String>,
         /// If set, generates a flamegraph SVG at the given path.
         /// Cannot be used together with --witness-output-dir.
         #[arg(long, conflicts_with = "witness_output_dir")]
@@ -105,6 +109,8 @@ fn main() -> anyhow::Result<()> {
             witness_output_dir,
             chain_id,
             single_tx,
+            // SYSCOIN: pass the benchmark DA mode through to the block runner.
+            da_commitment_scheme,
             flamegraph,
         } => crate::single_run::single_run(
             block_dir,
@@ -113,6 +119,8 @@ fn main() -> anyhow::Result<()> {
             witness_output_dir,
             chain_id,
             single_tx,
+            // SYSCOIN: pass the benchmark DA mode through to the block runner.
+            da_commitment_scheme,
             flamegraph,
         ),
         Command::LiveRun {
