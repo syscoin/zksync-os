@@ -86,17 +86,17 @@ fn run_precompile(precompile_id: &str, gas: Option<u64>, input: &[u8]) -> BlockO
 }
 
 // SYSCOIN: keep the 0x101 integration vector out of the already-large inline
-// precompile table. This legacy acceptance signature is copied from:
+// precompile table. This existing repository test signature is copied from:
 // `contracts/test/vectors/slh_dsa_sha2_128_24_kat.json`, introduced by commit
 // 6b43ab88a6e3851f45529e89d23670d0fc0c324b. Its original JSON SHA-256 was
 // 859639cf4c2c1d508a95556923791610e9c1f957438703526928cdf07674bdb9;
 // the provenance-annotated corpus JSON is ba33ddf2addd6393e727b2c299e10ec2b551bfaf3dc7fe23373e7df00dfa6385.
 const SLH_DSA_SHA2_128_24_PRECOMPILE: &str = "0000000000000000000000000000000000000101";
-const SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE: &str =
+const SLH_DSA_SHA2_128_24_EXISTING_TEST_SIGNATURE: &str =
     include_str!("../fixtures/slh_dsa_sha2_128_24_valid.sig.hex");
-const SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE_SHA256: &str =
+const SLH_DSA_SHA2_128_24_EXISTING_TEST_SIGNATURE_SHA256: &str =
     "39aa2b5f6544bd143881b07920be7f030d4018d82f95b32d38f366d96102b02c";
-const SLH_DSA_SHA2_128_24_LEGACY_INPUT_SHA256: &str =
+const SLH_DSA_SHA2_128_24_EXISTING_TEST_INPUT_SHA256: &str =
     "eb9bfc260ad0f03e04a313f2bee122bcde1434365110253bfae0652281ba6139";
 // SYSCOIN: reproducible counter-0 vector generated from the exact SP 800-230
 // IPD tuple and independently accepted by pinned pq-code-package/slhdsa-c.
@@ -148,15 +148,15 @@ fn checked_slh_dsa_sha2_128_24_input(
     input
 }
 
-fn slh_dsa_sha2_128_24_legacy_input() -> Vec<u8> {
+fn slh_dsa_sha2_128_24_existing_test_vector_input() -> Vec<u8> {
     checked_slh_dsa_sha2_128_24_input(
-        SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE,
-        SLH_DSA_SHA2_128_24_LEGACY_SIGNATURE_SHA256,
+        SLH_DSA_SHA2_128_24_EXISTING_TEST_SIGNATURE,
+        SLH_DSA_SHA2_128_24_EXISTING_TEST_SIGNATURE_SHA256,
         "9af9a6d986bc7450f99c34e8aca453c800000000000000000000000000000000",
         "37b5d97afcfbd8118e75e50aba480a9e00000000000000000000000000000000",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        SLH_DSA_SHA2_128_24_LEGACY_INPUT_SHA256,
-        "legacy acceptance vector",
+        SLH_DSA_SHA2_128_24_EXISTING_TEST_INPUT_SHA256,
+        "existing repository test vector",
     )
 }
 
@@ -204,9 +204,9 @@ fn assert_slh_dsa_sha2_128_24_routes(input: &[u8], expected: &[u8]) {
 fn test_syscoin_slh_dsa_sha2_128_24_precompile_conformance_routing() {
     let mut expected = [0u8; 32];
     expected[31] = 1;
-    // SYSCOIN: retain the historical accepted signature and require the exact
+    // SYSCOIN: retain the existing repository test signature and require the exact
     // reproducible IPD counter-0 vector on both direct and forwarded routes.
-    assert_slh_dsa_sha2_128_24_routes(&slh_dsa_sha2_128_24_legacy_input(), &expected);
+    assert_slh_dsa_sha2_128_24_routes(&slh_dsa_sha2_128_24_existing_test_vector_input(), &expected);
     assert_slh_dsa_sha2_128_24_routes(&slh_dsa_sha2_128_24_ipd_counter0_input(), &expected);
 }
 
