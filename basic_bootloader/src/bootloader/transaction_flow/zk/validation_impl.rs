@@ -509,6 +509,8 @@ where
         resources_before_refund: S::Resources::empty(),
         intrinsic_resources,
         authorization_list_num,
+        // SYSCOIN: decided in `precharge_fee` after validation completes.
+        fee_paid_from_gas_tank: false,
     })
 }
 

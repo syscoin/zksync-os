@@ -13,7 +13,8 @@ pub struct KZGCommitmentAndProof {
 }
 
 impl UsizeSerializable for KZGCommitmentAndProof {
-    const USIZE_LEN: usize = 96 / size_of::<usize>();
+    // SYSCOIN: encode only 32-byte blob id (8 words on 32-bit host, 4 on 64-bit host).
+    const USIZE_LEN: usize = 32 / size_of::<usize>();
 
     fn iter(&self) -> impl ExactSizeIterator<Item = usize> {
         cfg_if::cfg_if!(
@@ -21,10 +22,11 @@ impl UsizeSerializable for KZGCommitmentAndProof {
                 compile_error!("unsupported architecture: big endian arch is not supported")
             } else {
                 #[allow(clippy::needless_return)]
-                return ExactSizeChain::new(
-                    self.commitment.as_chunks::<{ core::mem::size_of::<usize>() }>().0.iter().map(|chunk| usize::from_le_bytes(*chunk)),
-                    self.proof.as_chunks::<{ core::mem::size_of::<usize>() }>().0.iter().map(|chunk| usize::from_le_bytes(*chunk)),
-                );
+                return self.commitment[..32]
+                    .as_chunks::<{ core::mem::size_of::<usize>() }>()
+                    .0
+                    .iter()
+                    .map(|chunk| usize::from_le_bytes(*chunk));
             }
         );
     }
@@ -34,23 +36,15 @@ impl UsizeDeserializable for KZGCommitmentAndProof {
     const USIZE_LEN: usize = <Self as UsizeSerializable>::USIZE_LEN;
 
     fn from_iter(src: &mut impl ExactSizeIterator<Item = usize>) -> Result<Self, InternalError> {
-        const FIELD_USIZE_LEN: usize = 48 / core::mem::size_of::<usize>();
+        const FIELD_USIZE_LEN: usize = 32 / core::mem::size_of::<usize>();
         let mut out = Self {
             commitment: [0u8; 48],
             proof: [0u8; 48],
         };
         unsafe {
-            let commitment_usize_ptr = out.commitment.as_mut_ptr().cast::<usize>();
+            let commitment_usize_ptr = out.commitment[..32].as_mut_ptr().cast::<usize>();
             for i in 0..FIELD_USIZE_LEN {
                 commitment_usize_ptr
-                    .add(i)
-                    .write(src.next().ok_or(internal_error!(
-                        "KZGCommitmentAndProof deserialization failed"
-                    ))?);
-            }
-            let proof_usize_ptr = out.proof.as_mut_ptr().cast::<usize>();
-            for i in 0..FIELD_USIZE_LEN {
-                proof_usize_ptr
                     .add(i)
                     .write(src.next().ok_or(internal_error!(
                         "KZGCommitmentAndProof deserialization failed"

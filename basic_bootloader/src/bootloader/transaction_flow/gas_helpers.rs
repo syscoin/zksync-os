@@ -7,7 +7,8 @@ use crate::bootloader::constants::{
     L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_AUTHORIZATION,
     L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE, L2_TX_INTRINSIC_PUBDATA,
     L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION, SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST,
-    SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE, TX_INTRINSIC_GAS,
+    SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE,
+    SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA, TX_INTRINSIC_GAS,
 };
 use crate::require;
 use constants::{CALLDATA_TOKEN_GAS_COST, DEPLOYMENT_TX_EXTRA_INTRINSIC_GAS};
@@ -309,6 +310,14 @@ pub fn calculate_l2_tx_intrinsic_pubdata(authorization_list_num: u64, is_service
     intrinsic_pubdata = intrinsic_pubdata.saturating_add(
         authorization_list_num.saturating_mul(L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION),
     );
+
+    // SYSCOIN: when the zkSYS gas tank is enabled, budget the worst-case tank
+    // slot diffs written by fee charging (sender credit, coinbase credit,
+    // total credits). Charged as an upper bound for all L2 txs on tank-enabled
+    // deployments, mirroring the worst-case budgeting of the balance diffs.
+    if crate::bootloader::transaction_flow::zk::syscoin_gas_tank::gas_tank_enabled() {
+        intrinsic_pubdata = intrinsic_pubdata.saturating_add(SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA);
+    }
 
     intrinsic_pubdata
 }

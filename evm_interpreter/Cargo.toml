@@ -25,6 +25,7 @@ paste = { workspace = true }
 point_eval_precompile = []
 mock-unsupported-precompiles = []
 p256_precompile = []
+slh_dsa_precompile = []
 eip-7645 = []
 eip-2537 = []
 eip-152 = []

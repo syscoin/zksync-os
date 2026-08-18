@@ -15,6 +15,9 @@ pub const BLAKE2F_HOOK_ADDRESS_LOW: u16 = 0x0009;
 pub const POINT_EVAL_HOOK_ADDRESS_LOW: u16 = 0x000a;
 #[cfg(feature = "p256_precompile")]
 pub const P256_VERIFY_PREHASH_HOOK_ADDRESS_LOW: u16 = 0x0100;
+// SYSCOIN: fixed-parameter SLH-DSA-SHA2-128-24 verifier precompile.
+#[cfg(feature = "slh_dsa_precompile")]
+pub const SLH_DSA_SHA2_128_24_VERIFY_HOOK_ADDRESS_LOW: u16 = 0x0101;
 
 pub const BLS12_G1ADD_ADDRESS_LOW: u16 = 0x0b;
 pub const BLS12_G1MSM_ADDRESS_LOW: u16 = 0x0c;
@@ -43,6 +46,8 @@ pub const PRECOMPILE_ADDRESSES_LOWS: &[u16] = &[
     POINT_EVAL_HOOK_ADDRESS_LOW,
     #[cfg(feature = "p256_precompile")]
     P256_VERIFY_PREHASH_HOOK_ADDRESS_LOW,
+    #[cfg(feature = "slh_dsa_precompile")]
+    SLH_DSA_SHA2_128_24_VERIFY_HOOK_ADDRESS_LOW,
     #[cfg(feature = "eip-2537")]
     BLS12_G1ADD_ADDRESS_LOW,
     #[cfg(feature = "eip-2537")]

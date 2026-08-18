@@ -409,6 +409,7 @@ where
         native_used,
         pubdata_used: pubdata_used + intrinsic_pubdata,
         blob_gas_used: 0,
+        collects_syscoin_edge_da_refs: false,
     })
 }
 

@@ -45,7 +45,7 @@ unlimited_native = ["basic_bootloader/unlimited_native"]
 # A feature for every specific use case
 
 # Features used for production, by both the singleblock_batch and multiblock_batch binaries.
-production = ["basic_bootloader/eip-7702", "system_hooks/p256_precompile"]
+production = ["basic_bootloader/eip-7702", "system_hooks/p256_precompile", "system_hooks/slh_dsa_precompile"]
 
 # Features used for tests.
 for_tests = ["production", "basic_bootloader/eip-4844"]

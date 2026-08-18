@@ -129,6 +129,9 @@ pub struct BlockMetadataFromOracle {
     /// of prevRandao.
     pub mix_hash: U256,
     pub blob_fee: U256,
+    /// Canonical settlement-layer upgrade tx hash for this block's upgrade batch.
+    /// Zero when the block is not the upgrade block.
+    pub canonical_upgrade_tx_hash: Bytes32,
 }
 
 impl BasicBlockMetadata<EthereumIOTypesConfig> for BlockMetadataFromOracle {
@@ -217,6 +220,7 @@ impl BlockMetadataFromOracle {
             block_hashes: BlockHashes::default(),
             mix_hash: U256::ONE,
             blob_fee: U256::ZERO,
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
         }
     }
 }
@@ -225,7 +229,8 @@ impl UsizeSerializable for BlockMetadataFromOracle {
     const USIZE_LEN: usize = <U256 as UsizeSerializable>::USIZE_LEN
         * (5 + BLOCK_HASHES_WINDOW_SIZE)
         + <u64 as UsizeSerializable>::USIZE_LEN * 5
-        + <B160 as UsizeDeserializable>::USIZE_LEN;
+        + <B160 as UsizeDeserializable>::USIZE_LEN
+        + <Bytes32 as UsizeSerializable>::USIZE_LEN;
 
     fn iter(&self) -> impl ExactSizeIterator<Item = usize> {
         ExactSizeChain::new(
@@ -260,7 +265,10 @@ impl UsizeSerializable for BlockMetadataFromOracle {
                 ),
                 UsizeSerializable::iter(&self.mix_hash),
             ),
-            UsizeSerializable::iter(&self.blob_fee),
+            ExactSizeChain::new(
+                UsizeSerializable::iter(&self.blob_fee),
+                UsizeSerializable::iter(&self.canonical_upgrade_tx_hash),
+            ),
         )
     }
 }
@@ -281,6 +289,7 @@ impl UsizeDeserializable for BlockMetadataFromOracle {
         let block_hashes = UsizeDeserializable::from_iter(src)?;
         let mix_hash = UsizeDeserializable::from_iter(src)?;
         let blob_fee = UsizeDeserializable::from_iter(src)?;
+        let canonical_upgrade_tx_hash = UsizeDeserializable::from_iter(src)?;
 
         let new = Self {
             eip1559_basefee,
@@ -295,6 +304,7 @@ impl UsizeDeserializable for BlockMetadataFromOracle {
             block_hashes,
             mix_hash,
             blob_fee,
+            canonical_upgrade_tx_hash,
         };
 
         Ok(new)

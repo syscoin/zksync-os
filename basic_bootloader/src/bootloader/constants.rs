@@ -207,6 +207,12 @@ const SENDER_ACCOUNT_INTRINSIC_PUBDATA: u64 = 32 /*key*/ + 1 /*account metadata*
 pub const L2_TX_INTRINSIC_PUBDATA: u64 =
     SENDER_ACCOUNT_INTRINSIC_PUBDATA + COINBASE_BALANCE_INTRINSIC_PUBDATA;
 
+// SYSCOIN: worst-case pubdata for zkSYS gas-tank fee payment: three
+// storage-slot diffs (sender credit, coinbase credit, total credits), each
+// priced as a 32-byte key plus a 34-byte uncompressed value update, matching
+// the worst-case convention of COINBASE_BALANCE_INTRINSIC_PUBDATA.
+pub const SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA: u64 = 3 * (32 + 34);
+
 /// L2 tx authorization intrinsic pubdata.
 pub const L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION: u64 = // Full diff compression:
     32 + // key

@@ -6,6 +6,7 @@ use zk_ee::common_structs::GenericEventContent;
 use zk_ee::system::evm::EvmError as ZkEvmError;
 use zk_ee::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromOracle};
 use zk_ee::types_config::EthereumIOTypesConfig;
+use zk_ee::utils::Bytes32;
 use zksync_os_evm_errors::EvmError as InterfaceEvmError;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::traits::AnyBlockContext;
@@ -94,6 +95,7 @@ impl<B: AnyBlockContext> FromInterface<B> for BlockMetadataFromOracle {
             pubdata_limit: value.pubdata_limit(),
             mix_hash: value.mix_hash(),
             blob_fee: value.blob_fee(),
+            canonical_upgrade_tx_hash: Bytes32::ZERO,
         }
     }
 }

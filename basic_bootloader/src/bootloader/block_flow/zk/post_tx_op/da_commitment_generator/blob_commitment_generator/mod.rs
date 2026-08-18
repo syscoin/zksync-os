@@ -33,12 +33,14 @@ pub const ELEMENTS_PER_4844_BLOB: usize = 4096;
 ///
 /// Number of bytes we can encode in one blob
 ///
-pub const ENCODABLE_BYTES_PER_BLOB: usize = BLOB_CHUNK_SIZE * ELEMENTS_PER_4844_BLOB;
+// SYSCOIN: Bitcoin DA accepts up to 2 MiB per blob; keep the legacy constant
+// name because the rest of the DA commitment path is keyed off this value.
+pub const ENCODABLE_BYTES_PER_BLOB: usize = 2 * 1024 * 1024;
 
 ///
 /// Maximal number of blobs that we support with blobs DA mode.
 ///
-pub const MAX_NUMBER_OF_BLOBS: usize = 9;
+pub const MAX_NUMBER_OF_BLOBS: usize = 32;
 
 pub const BUFFER_CAPACITY: usize = ENCODABLE_BYTES_PER_BLOB * MAX_NUMBER_OF_BLOBS;
 
@@ -104,25 +106,20 @@ pub fn blob_versioned_hash_with_advisor(
     // We get commitment and proof from an external source (advisor)
     // Correctness is checked below
     let commitment_and_proof = advisor.get_blob_commitment_and_proof_advice(data);
+    let mut advised_blob_data_id = [0u8; 32];
+    advised_blob_data_id.copy_from_slice(&commitment_and_proof.commitment[..32]);
+    let local_blob_data_id = blob_data_id(data);
 
-    let commitment = parse_g1_compressed(&commitment_and_proof.commitment)
-        .expect("Invalid blob commitment point");
-    let proof = parse_g1_compressed(&commitment_and_proof.proof).expect("Invalid blob proof point");
-    let versioned_hash = versioned_hash_for_kzg(commitment_and_proof.commitment.as_slice());
-    let evaluation_point = calculate_evaluation_point(data, &versioned_hash);
-    let opening_value = polynomial_evaluation::evaluate_blob_polynomial(data, &evaluation_point);
-
-    assert!(
-        crypto::bls12_381::verify_kzg_proof(
-            commitment,
-            proof,
-            evaluation_point.into_bigint(),
-            opening_value.into_bigint(),
-        ),
-        "Failed to verify blob proof"
+    assert_eq!(
+        advised_blob_data_id, local_blob_data_id,
+        "Blob data id advice mismatch"
     );
 
-    versioned_hash
+    local_blob_data_id
+}
+
+fn blob_data_id(data: &[u8]) -> [u8; 32] {
+    crypto::blake2s::Blake2s256::digest(data)
 }
 
 fn calculate_evaluation_point(data: &[u8], versioned_hash: &[u8]) -> crypto::bls12_381::Fr {

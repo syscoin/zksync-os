@@ -108,8 +108,28 @@ where
 
         io.logs_storage
             .apply_to_array_vec(&mut batch_data.logs_storage);
+        // SYSCOIN: accumulate compact edge DA refs only from the authorized Gateway commit tx.
+        io.logs_storage
+            .apply_syscoin_edge_da_refs_root_for_tx_numbers(
+                &mut batch_data.edge_da_refs_root,
+                &block_data.syscoin_compact_edge_da_ref_tx_numbers,
+            );
 
-        let upgrade_tx_hash = block_data.upgrade_tx_recorder.finish();
+        let recorded_upgrade_tx_hash = block_data.upgrade_tx_recorder.finish();
+        let canonical_upgrade_tx_hash = metadata.block_level.canonical_upgrade_tx_hash;
+        // SYSCOIN: canonical metadata may only replace an empty recorder hash
+        // (patch-only upgrade) or the same hash that execution recorded.
+        if canonical_upgrade_tx_hash != Bytes32::ZERO
+            && recorded_upgrade_tx_hash != Bytes32::ZERO
+            && recorded_upgrade_tx_hash != canonical_upgrade_tx_hash
+        {
+            return Err(zk_ee::internal_error!("canonical upgrade tx hash mismatch").into());
+        }
+        let upgrade_tx_hash = if canonical_upgrade_tx_hash == Bytes32::ZERO {
+            recorded_upgrade_tx_hash
+        } else {
+            canonical_upgrade_tx_hash
+        };
         let (multichain_root, settlement_layer_chain_id) = read_batch_context_inputs(&mut io);
 
         let (mut state_commitment, last_block_timestamp) = {

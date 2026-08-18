@@ -23,6 +23,11 @@ use ruint::aliases::U256;
 pub const L2_TO_L1_LOG_SERIALIZE_SIZE: usize = 88;
 // Taken from the size of the Merkle tree.
 pub const MAX_NUMBER_OF_LOGS: u64 = 16_384;
+// SYSCOIN: compact RelayedSLDAValidator message version for edge DA refs.
+const SYSCOIN_RELAYED_EDGE_DA_VALIDATOR_VERSION: u8 = 1;
+const SYSCOIN_EDGE_DA_REFS_DOMAIN: &[u8] = b"SYSCOIN_EDGE_DA_REFS_V1";
+const ABI_WORD: usize = 32;
+const SYSCOIN_EDGE_DA_REF_HEAD_BYTES: usize = ABI_WORD * 5;
 
 ///
 /// L2 to l1 log structure, used for merkle tree leaves.
@@ -260,6 +265,40 @@ impl<SF: StackFactory<M>, const M: usize, A: Allocator + Clone + Default> LogsSt
     pub fn apply_l2_to_l1_logs_hashes_to_hasher(&self, hasher: &mut impl MiniDigest) {
         for message in self.list.iter() {
             hasher.update(L2ToL1Log::from(message).hash().as_u8_ref());
+        }
+    }
+
+    pub fn syscoin_edge_da_refs_root_for_tx_numbers(
+        &self,
+        authorized_tx_numbers: &[u32],
+    ) -> Bytes32 {
+        // SYSCOIN: ordered rolling root over compact edge DA refs emitted by authorized
+        // Gateway commit transactions.
+        let mut root = Bytes32::ZERO;
+        self.apply_syscoin_edge_da_refs_root_for_tx_numbers(&mut root, authorized_tx_numbers);
+        root
+    }
+
+    pub fn apply_syscoin_edge_da_refs_root_for_tx_numbers(
+        &self,
+        root: &mut Bytes32,
+        authorized_tx_numbers: &[u32],
+    ) {
+        // SYSCOIN: extend an existing ordered root with this block's authorized compact edge DA refs.
+        for message in self.list.iter() {
+            if authorized_tx_numbers.binary_search(&message.tx_number).is_err() {
+                continue;
+            }
+            let GenericLogContentData::UserMsg(UserMsgData { data, .. }) = &message.data else {
+                continue;
+            };
+            let Some(edge_ref_hash) = syscoin_edge_da_ref_hash(data.as_slice()) else {
+                continue;
+            };
+            let mut hasher = crypto::sha3::Keccak256::new();
+            hasher.update(root.as_u8_ref());
+            hasher.update(edge_ref_hash.as_u8_ref());
+            *root = hasher.finalize().into();
         }
     }
 
@@ -522,4 +561,47 @@ impl<A: Allocator> From<&LogContent<A>> for L2ToL1Log {
             value,
         }
     }
+}
+
+// SYSCOIN: hash abi.encode(uint8 version, uint256 chainId, uint256 batchNumber,
+// bytes32 daCommitment, bytes blobHashes) emitted by the compact Gateway DA validator.
+fn syscoin_edge_da_ref_hash(message: &[u8]) -> Option<Bytes32> {
+    if message.len() < SYSCOIN_EDGE_DA_REF_HEAD_BYTES + ABI_WORD {
+        return None;
+    }
+    if message[..31] != [0u8; 31] || message[31] != SYSCOIN_RELAYED_EDGE_DA_VALIDATOR_VERSION {
+        return None;
+    }
+    let blob_hashes_offset = u256_word_to_usize(&message[ABI_WORD * 4..ABI_WORD * 5])?;
+    if blob_hashes_offset != SYSCOIN_EDGE_DA_REF_HEAD_BYTES {
+        return None;
+    }
+    let blob_hashes_len_offset = blob_hashes_offset;
+    let blob_hashes_start = blob_hashes_len_offset + ABI_WORD;
+    if message.len() < blob_hashes_start {
+        return None;
+    }
+    let blob_hashes_len = u256_word_to_usize(&message[blob_hashes_len_offset..blob_hashes_start])?;
+    if blob_hashes_len == 0 || blob_hashes_len % ABI_WORD != 0 {
+        return None;
+    }
+    let blob_hashes_end = blob_hashes_start.checked_add(blob_hashes_len)?;
+    if message.len() != blob_hashes_end {
+        return None;
+    }
+
+    let mut hasher = crypto::sha3::Keccak256::new();
+    hasher.update(SYSCOIN_EDGE_DA_REFS_DOMAIN);
+    hasher.update(&message[ABI_WORD..ABI_WORD * 4]);
+    let blob_count = U256::from(blob_hashes_len / ABI_WORD);
+    hasher.update(blob_count.to_be_bytes::<32>());
+    hasher.update(&message[blob_hashes_start..blob_hashes_end]);
+    Some(hasher.finalize().into())
+}
+
+fn u256_word_to_usize(word: &[u8]) -> Option<usize> {
+    if word.len() != ABI_WORD || word[..24] != [0u8; 24] {
+        return None;
+    }
+    usize::try_from(u64::from_be_bytes(word[24..].try_into().ok()?)).ok()
 }
