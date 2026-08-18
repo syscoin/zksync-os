@@ -626,6 +626,54 @@ mod tests {
     }
 
     #[test]
+    fn worst_case_wots_path_observes_398_compressions() {
+        struct WorstCaseHashing {
+            compressions: usize,
+        }
+
+        impl SlhHashing for WorstCaseHashing {
+            fn new(_seed: &[u8; N]) -> Self {
+                // Every internal hash shares the one precomputed seed block.
+                Self { compressions: 1 }
+            }
+
+            fn message_digest(
+                &mut self,
+                _root: &[u8; N],
+                _message: &[u8; 32],
+                _randomness: &[u8; N],
+            ) -> [u8; 32] {
+                self.compressions += 4;
+                [0u8; 32]
+            }
+
+            fn hash_n<const M: usize>(
+                &mut self,
+                _address: CompressedAddress,
+                _parts: &[[u8; N]; M],
+            ) -> [u8; N] {
+                self.compressions += sha256_compressions(64 + 22 + M * N) - 1;
+
+                // Returning zero for the M=6 FORS aggregation makes all 64
+                // WOTS message digits zero. The first 64 chains therefore
+                // take 192 steps; checksum 192 is base-4 3000 and adds nine,
+                // exercising the attainable maximum of 201 WOTS steps.
+                [0u8; N]
+            }
+        }
+
+        let mut hashing = WorstCaseHashing::new(&[0u8; N]);
+        let root = [1u8; N];
+        let message = [0u8; 32];
+        let signature = [0u8; SIGNATURE_LEN];
+        assert_eq!(
+            verify_parsed(&root, &message, &signature, &mut hashing),
+            Some(false)
+        );
+        assert_eq!(hashing.compressions, 398);
+    }
+
+    #[test]
     fn raw_midstate_matches_digest_for_every_used_arity_and_extreme_address() {
         fn next_byte(random: &mut u64) -> u8 {
             *random ^= *random >> 12;
@@ -700,9 +748,9 @@ mod tests {
 
         for len in [0, 1, 31, 32, 63, 64, 95, 96, 3951, 3952, 3953, 8192] {
             let input = vec![0x5a; len];
-            assert!(
-                catch_unwind(AssertUnwindSafe(|| { slh_dsa_sha2_128_24_verify(&input) })).is_ok()
-            );
+            let result = catch_unwind(AssertUnwindSafe(|| slh_dsa_sha2_128_24_verify(&input)));
+            assert!(result.is_ok());
+            assert_eq!(result.ok(), Some(false));
         }
 
         let mut random = 0x6a09_e667_f3bc_c908u64;
@@ -721,6 +769,16 @@ mod tests {
             assert!(
                 catch_unwind(AssertUnwindSafe(|| { slh_dsa_sha2_128_24_verify(&input) })).is_ok()
             );
+        }
+    }
+
+    #[test]
+    fn canonical_public_key_extremes_reject_without_panicking() {
+        for value in [0u8, u8::MAX] {
+            let mut input = vec![0u8; INPUT_LEN];
+            input[..N].fill(value);
+            input[32..32 + N].fill(value);
+            assert!(!slh_dsa_sha2_128_24_verify(&input));
         }
     }
 
