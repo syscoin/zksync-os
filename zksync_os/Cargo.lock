@@ -229,7 +229,7 @@ dependencies = [
 [[package]]
 name = "blake2s_u32"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2#b93c285d292891f3c27a3cf0110be09cde30ac4f"
+source = "git+https://github.com/matter-labs/zksync-airbender?tag=v0.5.2-2026-02-10#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "unroll",
 ]
