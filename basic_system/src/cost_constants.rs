@@ -12,9 +12,9 @@ pub const RIPEMD_160_PER_WORD_COST_ERGS: Ergs = Ergs(120 * ERGS_PER_GAS);
 pub const MODEXP_MINIMAL_COST_ERGS: Ergs = Ergs(200 * ERGS_PER_GAS);
 pub const P256_VERIFY_COST_ERGS: Ergs = Ergs(6900 * ERGS_PER_GAS);
 pub const ECRECOVER_COST_ERGS: Ergs = Ergs(3000 * ERGS_PER_GAS);
-// SYSCOIN: fixed cost for SLH-DSA-SHA2-128-24 verification at precompile 0x101.
-// Derived from the verifier's worst-case SHA-256 precompile-equivalent work:
-// 379 SHA calls, 778 compression rounds, and no EVM interpreter loop overhead.
+// SYSCOIN: consensus-fixed SLH-DSA-SHA2-128-24 charge at precompile 0x101.
+// Keep the conservative charge stable across portable implementation changes;
+// the verifier tests assert its worst-case 398 SHA-256 compression ceiling.
 pub const SLH_DSA_SHA2_128_24_VERIFY_COST_ERGS: Ergs = Ergs(45_000 * ERGS_PER_GAS);
 pub const BN254_ECADD_COST_ERGS: Ergs = Ergs(150 * ERGS_PER_GAS);
 pub const BN254_ECMUL_COST_ERGS: Ergs = Ergs(6000 * ERGS_PER_GAS);
@@ -52,7 +52,8 @@ pub const BN254_PAIRING_BASE_NATIVE_COST: u64 = native_with_delegations!(13_000_
 pub const BN254_PAIRING_PER_PAIR_NATIVE_COST: u64 = BN254_PAIRING_BASE_NATIVE_COST;
 pub const MODEXP_WORST_CASE_NATIVE_PER_GAS: u64 = 300;
 pub const P256_NATIVE_COST: u64 = native_with_delegations!(500_000, 71_000, 0);
-// SYSCOIN: same SHA-256 round accounting as `Sha256Impl`, with a small parser/loop margin.
-pub const SLH_DSA_SHA2_128_24_VERIFY_NATIVE_COST: u64 = native_with_delegations!(4_300_000, 650_000, 0);
+// SYSCOIN: retain the reviewed conservative native charge across portable optimizations.
+pub const SLH_DSA_SHA2_128_24_VERIFY_NATIVE_COST: u64 =
+    native_with_delegations!(4_300_000, 650_000, 0);
 // TODO(EVM-1178) Add more vectors and benchmark cost better
 pub const POINT_EVALUATION_NATIVE_COST: u64 = native_with_delegations!(49_900_000, 3_301_000, 0);
