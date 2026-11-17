@@ -6,13 +6,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ZKSYNC_OS_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$ZKSYNC_OS_DIR")"
 
-# `cargo airbender build --reproducible` passes `--locked` to cargo, so both
-# the workspace root and the guest crate need a Cargo.lock present.
-# The workspace root Cargo.lock is gitignored, so we generate it here.
-# The guest zksync_os/Cargo.lock is committed and used as-is.
-#
-# NOTE: the toolchain version must match rust-toolchain.toml.
-cargo +nightly-2026-02-10 generate-lockfile --manifest-path "$REPO_ROOT/Cargo.toml"
+# Syscoin reviews both lockfiles. Resolving the host graph again here would
+# discard its release pins before the reproducible guest build starts.
+for lockfile in "$REPO_ROOT/Cargo.lock" "$ZKSYNC_OS_DIR/Cargo.lock"; do
+    if [[ ! -s "$lockfile" ]]; then
+        echo "Missing pinned Cargo lockfile $lockfile" >&2
+        exit 1
+    fi
+done
 
 cd "$ZKSYNC_OS_DIR"
 
