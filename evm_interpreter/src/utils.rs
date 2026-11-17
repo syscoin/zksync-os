@@ -22,7 +22,9 @@ impl<S: EthereumLikeTypes> Interpreter<'_, S> {
     #[inline]
     pub(crate) fn cast_to_usize(src: &U256, error_to_set: ExitCode) -> Result<usize, ExitCode> {
         // Heap growth and its native charge must follow the proving guest's address width.
-        src.try_to_u32().map(|value| value as usize).ok_or(error_to_set)
+        src.try_to_u32()
+            .map(|value| value as usize)
+            .ok_or(error_to_set)
     }
 
     /// Casts a 256-bit value to `u64`.

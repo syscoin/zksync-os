@@ -1,7 +1,9 @@
 use basic_system::cost_constants::{
     blake2s_native_cost, ECRECOVER_NATIVE_COST, KECCAK256_CHUNK_SIZE, KECCAK256_ROUND_NATIVE_COST,
 };
-use basic_system::system_functions::keccak256::{keccak256_native_cost_for_rounds_u64, keccak256_native_cost_u64};
+use basic_system::system_functions::keccak256::{
+    keccak256_native_cost_for_rounds_u64, keccak256_native_cost_u64,
+};
 use zk_ee::common_structs::logs_storage::L2_TO_L1_LOG_TREE_HEIGHT;
 // SYSCOIN: Gas-tank resource bounds use the same canonical storage-model cost constants as the
 // system mutation path they constrain.
@@ -427,7 +429,8 @@ pub const BLOCK_INTRINSIC_PUBDATA_BYTES: u64 =
 
 // The proving post-op reads the shared tree height, its dynamic root and the
 // settlement chain ID with local FORMAL_INFINITE resources. A slot can be new.
-const BATCH_CONTEXT_NATIVE_COST: u64 = 3 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
+const BATCH_CONTEXT_NATIVE_COST: u64 = 3
+    * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
     + keccak256_native_cost_u64(32);
 
 // Each published log pays for its leaf and one internal hash. Padding the
@@ -461,16 +464,21 @@ mod tests {
         let max_residual = (1..=1usize << L2_TO_L1_LOG_TREE_HEIGHT)
             .map(|leaves| {
                 let internal: usize = (1..=L2_TO_L1_LOG_TREE_HEIGHT)
-                    .map(|level| leaves.div_ceil(1usize << level)).sum();
+                    .map(|level| leaves.div_ceil(1usize << level))
+                    .sum();
                 internal.saturating_sub(leaves) as u64
             })
             .max()
             .unwrap();
         assert_eq!(max_residual, L2_TO_L1_LOG_TREE_HEIGHT as u64 - 1);
-        assert_eq!(BLOCK_INTRINSIC_NATIVE,
-            EIP_2935_INTRINSIC_NATIVE + 2 * L1_TX_ASSET_TRACKER_COLD_NOTIFICATION_NATIVE_COST
-            + 3 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
-            + keccak256_native_cost_u64(32) + max_residual * keccak256_native_cost_u64(64));
+        assert_eq!(
+            BLOCK_INTRINSIC_NATIVE,
+            EIP_2935_INTRINSIC_NATIVE
+                + 2 * L1_TX_ASSET_TRACKER_COLD_NOTIFICATION_NATIVE_COST
+                + 3 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
+                + keccak256_native_cost_u64(32)
+                + max_residual * keccak256_native_cost_u64(64)
+        );
     }
 
     #[test]

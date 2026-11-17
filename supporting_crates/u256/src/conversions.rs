@@ -43,7 +43,8 @@ macro_rules! impl_conversions {
 
             #[inline(always)]
             pub fn try_to_u32(&self) -> Option<u32> {
-                self.try_to_u64().and_then(|value| u32::try_from(value).ok())
+                self.try_to_u64()
+                    .and_then(|value| u32::try_from(value).ok())
             }
 
             #[inline(always)]
@@ -96,7 +97,10 @@ mod tests {
             ([0, 1, 0, 0], None),
         ] {
             assert_eq!(crate::naive::U256::from_limbs(limbs).try_to_u32(), expected);
-            assert_eq!(crate::risc_v::U256::from_limbs(limbs).try_to_u32(), expected);
+            assert_eq!(
+                crate::risc_v::U256::from_limbs(limbs).try_to_u32(),
+                expected
+            );
         }
     }
 }
