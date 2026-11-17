@@ -21,7 +21,8 @@ use zk_ee::system::metadata::zk_metadata::ZkMetadata;
 use zk_ee::system::{IOTeardown, Resources};
 
 impl<
-        A: Allocator + Clone + Default,
+        // SYSCOIN: The selected compact generator owns a clone of this guest allocator.
+        A: Allocator + Clone + Default + 'static,
         R: Resources,
         P: StorageAccessPolicy<R, Bytes32> + Default,
         SF: StackFactory<N>,
@@ -89,13 +90,9 @@ where
         let mut da_commitment_generator =
             da_commitment_generator_from_scheme(io.da_commitment_scheme.unwrap(), A::default())
                 .unwrap();
-        // For keccak DA (`BlobsAndPubdataKeccak256`), `write_pubdata` streams
-        // bytes through `Keccak256CommitmentGenerator`, which absorbs them
-        // into the keccak state — this is where the bulk of keccak
-        // delegations fire on the DA-commit path. For blob DA
-        // (`BlobsZKsyncOS`) the same call just appends to a buffer (no
-        // hashing yet); the actual blob KZG work happens in `.finalize()`
-        // below and is already captured by the `blob_versioned_hash` marker.
+        // SYSCOIN: For keccak DA (`BlobsAndPubdataKeccak256`), `write_pubdata` streams bytes through
+        // `Keccak256CommitmentGenerator`. For compact Syscoin DA (`BlobsZKsyncOS`), the same
+        // call buffers the bytes; `.finalize()` computes the Blake2s data IDs in-guest.
         cycle_marker::wrap!("da_commitment", {
             write_pubdata(
                 da_commitment_generator.as_mut(),
@@ -162,9 +159,8 @@ where
             chain_state_commitment_before
         );
 
-        // update state commitment — this is the state-tree merkle commit
-        // (Blake-heavy). Distinct from `da_commitment` (keccak/blob over
-        // pubdata) and `blob_versioned_hash` (KZG per blob).
+        // SYSCOIN: The state-tree commitment remains distinct from the compact DA commitment over
+        // pubdata and its per-chunk Blake2s data IDs.
         cycle_marker::wrap!("state_commitment_update", {
             IOTeardown::<_>::update_commitment(
                 &mut io,
@@ -194,6 +190,8 @@ where
         );
         // We need to do this after the tree finalization, as we need to preserve
         // the order of oracle queries.
+        // SYSCOIN: The compact generator ignores the retained upstream oracle
+        // argument; keeping it avoids changing the shared KZG-capable trait.
         let da_commitment = da_commitment_generator.finalize(io.oracle());
 
         let batch_output = BatchOutput {
@@ -208,6 +206,12 @@ where
             upgrade_tx_hash,
             interop_roots_rolling_hash,
             settlement_layer_chain_id,
+            // SYSCOIN: fold only message hashes already validated against the baked relay while
+            // each authorized Gateway commit transaction was still rollback-capable.
+            edge_da_refs_root:
+                zk_ee::common_structs::logs_storage::syscoin_edge_da_refs_root_from_hashes(
+                    &block_data.syscoin_compact_edge_da_ref_hashes,
+                ),
         };
         logger_log!(logger, "PI calculation: batch output {:?}\n", batch_output,);
 

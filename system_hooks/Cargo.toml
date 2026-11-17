@@ -20,6 +20,7 @@ strum_macros = { workspace = true }
 paste = { workspace = true }
 
 [features]
+slh_dsa_precompile = ["evm_interpreter/slh_dsa_precompile"] # SYSCOIN: precompile 0x101
 cycle_marker = ["cycle_marker/log_to_file"]
 delegation = ["zk_ee/delegation", "evm_interpreter/delegation"]
 fri_precompile = []

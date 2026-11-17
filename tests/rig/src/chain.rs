@@ -1183,10 +1183,10 @@ impl<const RANDOMIZED_TREE: bool> Chain<RANDOMIZED_TREE> {
         // forward run
         let mut result_keeper = ForwardRunningResultKeeper::new(NoopTxCallback);
 
-        // The regular forward run uses ZKHeaderStructurePostTxOpSequencing,
+        // SYSCOIN: The regular forward run uses ZKHeaderStructurePostTxOpSequencing,
         // which substitutes NopCommitmentGenerator for the DA commit work.
         // Under DA schemes that fire cycle markers only in proving mode
-        // (notably BlobsZKsyncOS → blob_versioned_hash), the sequencing run's
+        // (notably BlobsZKsyncOS → blob_data_id), the sequencing run's
         // LABELS would have fewer entries than the RISC-V proving run's
         // markers, tripping the count assertion in print_cycle_markers.
         // Snapshot LABELS before the sequencing run and revert after, so the
@@ -1649,6 +1649,8 @@ impl<const RANDOMIZED_TREE: bool> Chain<RANDOMIZED_TREE> {
         oracle.add_external_processor(initial_values_responder.clone());
         oracle.add_external_processor(cl_responder.clone());
         oracle.add_external_processor(da_commitment_scheme_responder);
+        // SYSCOIN: Preserve upstream KZG processor registration. Compact DA
+        // performs its Blake2s work in-guest and therefore never queries it.
         if use_native_callable_oracles {
             // Native callable oracles compute results on the host without reading
             // guest memory (RamPeek). Required for prover-input recording where

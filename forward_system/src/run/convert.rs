@@ -133,6 +133,9 @@ impl IntoInterface<InvalidTransaction>
             basic_bootloader::bootloader::errors::InvalidTransaction::BlockNativeLimitReached => { InvalidTransaction::BlockNativeLimitReached }
             basic_bootloader::bootloader::errors::InvalidTransaction::BlockPubdataLimitReached => { InvalidTransaction::BlockPubdataLimitReached }
             basic_bootloader::bootloader::errors::InvalidTransaction::BlockL2ToL1LogsLimitReached => { InvalidTransaction::BlockL2ToL1LogsLimitReached }
+            // SYSCOIN: Preserve a dedicated guest-side classification while using the interface's
+            // generic sealing-limit carrier so the server rolls back, seals, and retries the tx.
+            basic_bootloader::bootloader::errors::InvalidTransaction::SyscoinEdgeDaRefsLimitReached => { InvalidTransaction::OtherLimitReached("SyscoinEdgeDaRefsLimitReached".into()) }
             basic_bootloader::bootloader::errors::InvalidTransaction::AuthListIsEmpty => {InvalidTransaction::AuthListIsEmpty}
             basic_bootloader::bootloader::errors::InvalidTransaction::EIP7702HasNullDestination => {InvalidTransaction::EIP7702HasNullDestination}
             basic_bootloader::bootloader::errors::InvalidTransaction::FilteredByValidator  => {InvalidTransaction::FilteredByValidator }

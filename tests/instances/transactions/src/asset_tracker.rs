@@ -31,8 +31,8 @@ use rig::forward_system::run::{
 use rig::fri::InMemoryFriProofSidecarSource;
 use rig::oracle_provider::ZkEENonDeterminismSource;
 use rig::predeployed_contracts::{
-    DEFAULT_BASE_TOKEN_ASSET_ID, L2_ASSET_TRACKER_L1_CHAIN_ID_SLOT,
-    SYSTEM_CONTEXT_SETTLEMENT_LAYER_CHAIN_ID_SLOT,
+    DEFAULT_BASE_TOKEN_ASSET_ID, L2_ASSET_TRACKER_BASE_TOKEN_ASSET_ID_SLOT,
+    L2_ASSET_TRACKER_L1_CHAIN_ID_SLOT, SYSTEM_CONTEXT_SETTLEMENT_LAYER_CHAIN_ID_SLOT,
 };
 use rig::ruint::aliases::{B256, U256};
 use rig::system_hooks::addresses_constants::{
@@ -205,6 +205,44 @@ fn read_l1_chain_id_tx(nonce: u64) -> ZKsyncTxEnvelope {
         input: L1_CHAIN_IDCall {}.abi_encode().into(),
     };
     ZKsyncTxEnvelope::from_eth_tx(tx, wallet)
+}
+
+// SYSCOIN: Canonical genesis deploys the AssetTracker proxy before its first
+// Upgrade transaction initializes the L1 chain ID and base-token asset ID.
+fn uninitialized_asset_tracker() -> TestingFramework {
+    TestingFramework::new()
+        .with_storage_slot(
+            asset_tracker_address(),
+            U256::from(L2_ASSET_TRACKER_L1_CHAIN_ID_SLOT),
+            B256::ZERO,
+        )
+        .with_storage_slot(
+            asset_tracker_address(),
+            U256::from(L2_ASSET_TRACKER_BASE_TOKEN_ASSET_ID_SLOT),
+            B256::ZERO,
+        )
+}
+
+#[test]
+fn test_preloop_allows_uninitialized_genesis_asset_tracker() {
+    let mut tester = uninitialized_asset_tracker();
+
+    let output = tester.execute_block(vec![]);
+    assert!(output.tx_results.is_empty());
+    assert_eq!(
+        tester.get_storage_slot(
+            &asset_tracker_address(),
+            U256::from(L2_ASSET_TRACKER_L1_CHAIN_ID_SLOT),
+        ),
+        Some(Bytes32::zero()),
+    );
+    assert_eq!(
+        tester.get_storage_slot(
+            &asset_tracker_address(),
+            U256::from(L2_ASSET_TRACKER_BASE_TOKEN_ASSET_ID_SLOT),
+        ),
+        Some(Bytes32::zero()),
+    );
 }
 
 #[test]

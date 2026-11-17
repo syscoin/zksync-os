@@ -6,7 +6,7 @@ use crate::bootloader::runner::RunnerMemoryBuffers;
 use crate::bootloader::supported_ees::errors::EESubsystemError;
 use crate::bootloader::transaction::Transaction;
 use crate::bootloader::transaction_flow::gas_helpers::{
-    calculate_l2_tx_intrinsic_pubdata, get_resources_to_charge_for_pubdata, ResourcesForTx,
+    get_resources_to_charge_for_pubdata, ResourcesForTx,
 };
 use crate::bootloader::transaction_flow::refund_calculation::compute_gas_refund;
 use crate::bootloader::transaction_flow::BasicTransactionFlow;
@@ -28,6 +28,8 @@ use zk_ee::execution_environment_type::ExecutionEnvironmentType;
 use zk_ee::system::errors::interface::InterfaceError;
 use zk_ee::system::errors::root_cause::GetRootCause;
 use zk_ee::system::errors::subsystem::SubsystemError;
+// SYSCOIN: Gas-tank precharge and settlement propagate system-level storage/resource failures.
+use zk_ee::system::errors::system::SystemError;
 use zk_ee::system::metadata::basic_metadata::BasicTransactionMetadata;
 use zk_ee::system::tracer::Tracer;
 use zk_ee::system::validator::TxValidator;
@@ -44,7 +46,14 @@ use super::gas_helpers::check_enough_resources_for_pubdata;
 #[cfg(feature = "fri_precompile")]
 mod fri;
 pub mod process_l1_transaction;
+pub mod syscoin_edge_da; // SYSCOIN: Gateway compact Bitcoin-DA commit classification
+pub mod syscoin_gas_tank; // SYSCOIN: canonical zkSYS fee-tank accounting
 mod validation_impl;
+
+// SYSCOIN: pinned Gateway identity and commit target jointly scope compact Edge-DA admission.
+use self::syscoin_edge_da::{
+    syscoin_compact_edge_da_commit_target, syscoin_compact_edge_da_enabled_on_chain,
+};
 
 pub struct ZkTransactionFlowOnlyEOA<S: EthereumLikeTypes> {
     _marker: core::marker::PhantomData<S>,
@@ -64,6 +73,8 @@ pub struct ZkTxResult<'a> {
     pub native_used: u64,
     pub pubdata_used: u64,
     pub blob_gas_used: u64,
+    /// SYSCOIN: true only for the authorized Gateway child-chain commit transaction.
+    pub collects_syscoin_edge_da_refs: bool,
 }
 
 impl<'a> MinimalTransactionOutput<'a> for ZkTxResult<'a> {
@@ -138,6 +149,10 @@ pub struct TxContextForPreAndPostProcessing<S: EthereumLikeTypes> {
     /// `computational_native_used`, and so `verify_intrinsic_native` can
     /// compare actual consumption against the formula.
     pub intrinsic_computational_native: u64,
+    /// SYSCOIN: Actual intrinsic pubdata branch reserved for this transaction.
+    /// Native fallback keeps the base bound; tank success adds its 198-byte
+    /// fee-ledger bound dynamically.
+    pub intrinsic_pubdata: u64,
     /// Number of EIP-7702 authorization list entries in the transaction.
     /// Used by `verify_intrinsic_native` to skip the overcharging check when
     /// authorizations are present (failed auths consume much less native than
@@ -145,6 +160,9 @@ pub struct TxContextForPreAndPostProcessing<S: EthereumLikeTypes> {
     pub authorization_list_num: u64,
     /// Number of FRI statement hashes referenced by the transaction.
     pub statement_versioned_hashes_num: u64,
+    /// SYSCOIN: true when the fee was precharged from the zkSYS gas tank.
+    /// Refund and operator payment must then settle against the same ledger.
+    pub fee_paid_from_gas_tank: bool,
 }
 
 impl<S: EthereumLikeTypes> core::fmt::Debug for TxContextForPreAndPostProcessing<S> {
@@ -169,11 +187,15 @@ impl<S: EthereumLikeTypes> core::fmt::Debug for TxContextForPreAndPostProcessing
                 "intrinsic_computational_native",
                 &self.intrinsic_computational_native,
             )
+            // SYSCOIN: Surface the dynamically selected pubdata branch.
+            .field("intrinsic_pubdata", &self.intrinsic_pubdata)
             .field("authorization_list_num", &self.authorization_list_num)
             .field(
                 "statement_versioned_hashes_num",
                 &self.statement_versioned_hashes_num,
             )
+            // SYSCOIN: Expose whether the transaction used the downstream tank settlement path.
+            .field("fee_paid_from_gas_tank", &self.fee_paid_from_gas_tank)
             .finish()
     }
 }
@@ -263,6 +285,45 @@ where
             "Will precharge {:?} native tokens for transaction\n",
             &fee
         );
+
+        // SYSCOIN: accounts that prepaid gas into the zkSYS gas tank pay the
+        // fee from their tank credit at 1:1 instead of the native balance.
+        // When the credit does not cover the full prepayment, fall through to
+        // the native path, which was pre-verified during validation.
+        match syscoin_gas_tank::try_precharge_from_gas_tank(
+            system,
+            &from,
+            &fee,
+            transaction.is_service(),
+            context.native_per_gas,
+            &mut context.intrinsic_resources,
+            &mut context.resources,
+            context.native_per_pubdata,
+            &mut context.intrinsic_computational_native,
+            &mut context.intrinsic_pubdata,
+        ) {
+            Ok(true) => {
+                context.fee_paid_from_gas_tank = true;
+                system_log!(system, "Fee precharged from the zkSYS gas tank\n");
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                return Err(match e {
+                    SystemError::LeafDefect(internal_error) => internal_error.into(),
+                    // SYSCOIN: P/D reservations upper-bound fee-ledger work;
+                    // any tracker depletion is a defensive validation failure.
+                    SystemError::LeafRuntime(runtime_error) => match runtime_error {
+                        RuntimeError::FatalRuntimeError(_) => {
+                            TxError::oon_as_validation(out_of_native_resources!().into())
+                        }
+                        RuntimeError::OutOfErgs(_) => {
+                            TxError::Validation(InvalidTransaction::OutOfGasDuringValidation)
+                        }
+                    },
+                });
+            }
+        }
 
         // ARCHITECTURE NOTE: Fee payment is split into two phases:
         // 1. Deduct full fee from sender at transaction start (here)
@@ -417,10 +478,9 @@ where
             &pubdata_info
         );
 
-        let intrinsic_pubdata = calculate_l2_tx_intrinsic_pubdata(
-            context.authorization_list_num,
-            transaction.is_service(),
-        );
+        // SYSCOIN: Use the branch actually reserved during precharge. Recomputing
+        // from static tx fields would lose the conditional tank pubdata charge.
+        let intrinsic_pubdata = context.intrinsic_pubdata;
 
         // Pubdata for validation has been charged already,
         // we charge for the rest now.
@@ -476,34 +536,48 @@ where
             let token_to_refund =
                 context.gas_price * U256::from(context.tx_gas_limit - context.gas_used); // can not overflow
 
-            // First refund the sender. Routed through `intrinsic_resources` so
-            // the native charge (precharged by the intrinsic formula) can be
-            // verified under `verify_intrinsic_native`.
-            context
-                .intrinsic_resources
-                .with_infinite_ergs(|resources| {
-                    system.io.update_account_nominal_token_balance(
-                        ExecutionEnvironmentType::NoEE,
-                        resources,
-                        &refund_recipient,
-                        &token_to_refund,
-                        false,
-                        Config::SIMULATION,
-                    )
-                })
-                .map_err(|e| match e {
-                    // Balance errors can not be cascaded
-                    SubsystemError::Cascaded(CascadedError(inner, _)) => match inner {},
-                    SubsystemError::LeafUsage(InterfaceError(ie, _)) => match ie {
-                        BalanceError::InsufficientBalance => {
-                            unreachable!("Cannot be insufficient when incrementing balance")
-                        }
-                        BalanceError::Overflow => {
-                            interface_error!(BootloaderInterfaceError::CantPayRefundOverflow)
-                        }
-                    },
-                    other => wrap_error!(other),
-                })?;
+            if context.fee_paid_from_gas_tank {
+                // SYSCOIN: the fee was precharged from the zkSYS gas tank, so
+                // the unused portion is refunded to the same ledger. Only the
+                // sender's credit is updated; `totalCredits` (untouched by the
+                // precharge) is reduced once during operator settlement below,
+                // by the burned fee.
+                syscoin_gas_tank::credit_gas_tank_account_only(
+                    system,
+                    &refund_recipient,
+                    &token_to_refund,
+                    &mut context.intrinsic_resources,
+                )?;
+            } else {
+                // First refund the sender. Routed through `intrinsic_resources` so
+                // the native charge (precharged by the intrinsic formula) can be
+                // verified under `verify_intrinsic_native`.
+                context
+                    .intrinsic_resources
+                    .with_infinite_ergs(|resources| {
+                        system.io.update_account_nominal_token_balance(
+                            ExecutionEnvironmentType::NoEE,
+                            resources,
+                            &refund_recipient,
+                            &token_to_refund,
+                            false,
+                            Config::SIMULATION,
+                        )
+                    })
+                    .map_err(|e| match e {
+                        // Balance errors can not be cascaded
+                        SubsystemError::Cascaded(CascadedError(inner, _)) => match inner {},
+                        SubsystemError::LeafUsage(InterfaceError(ie, _)) => match ie {
+                            BalanceError::InsufficientBalance => {
+                                unreachable!("Cannot be insufficient when incrementing balance")
+                            }
+                            BalanceError::Overflow => {
+                                interface_error!(BootloaderInterfaceError::CantPayRefundOverflow)
+                            }
+                        },
+                        other => wrap_error!(other),
+                    })?;
+            }
         }
 
         // Next we pay the operator
@@ -512,17 +586,24 @@ where
         // 2. Transfer actual payment to operator after execution (here)
         // This ensures sender has sufficient funds before execution begins
 
-        // EIP-1559 compatibility: When burn_base_fee is enabled, only priority fees
+        // EIP-1559 compatibility: when `burn_base_fee` is enabled, only priority fees
         // go to the operator. Base fees are effectively "burned" (not transferred anywhere).
-        let gas_price_for_operator = if cfg!(feature = "burn_base_fee") {
-            let base_fee = system.get_eip1559_basefee();
-            // We use saturating arithmetic to allow the caller of this method to
-            // allow gas_price < base_fee. This can be used, for example, for
-            // transaction simulation
-            context.gas_price.saturating_sub(base_fee)
-        } else {
-            context.gas_price
-        };
+        // SYSCOIN: gas-tank payments always use tip-only operator pricing even though
+        // native SYS payments keep the upstream full-gas-price operator payment behavior.
+        // The tank ledger stays solvent either way (settlement burns whatever was
+        // neither refunded nor tipped), but burning the zkSYS base-fee portion is the
+        // designed economics: it feeds the surplus that the tank contract's
+        // permissionless `burnSurplus()` destroys.
+        let gas_price_for_operator =
+            if context.fee_paid_from_gas_tank || cfg!(feature = "burn_base_fee") {
+                let base_fee = system.get_eip1559_basefee();
+                // We use saturating arithmetic to allow the caller of this method to
+                // allow gas_price < base_fee. This can be used, for example, for
+                // transaction simulation
+                context.gas_price.saturating_sub(base_fee)
+            } else {
+                context.gas_price
+            };
 
         system_log!(
             system,
@@ -535,6 +616,38 @@ where
             .ok_or(internal_error!("gu*gpfo"))?;
 
         let coinbase = system.get_coinbase();
+        if context.fee_paid_from_gas_tank {
+            // SYSCOIN: the tip is paid in-kind: the operator receives zkSYS
+            // gas-tank credit and can withdraw it to zkSYS at any time.
+            syscoin_gas_tank::credit_gas_tank_account_only(
+                system,
+                &coinbase,
+                &token_to_pay_operator,
+                &mut context.intrinsic_resources,
+            )?;
+            // SYSCOIN: Settle the tank-paid fee: reduce `totalCredits` exactly once, by
+            // the burned portion of the precharge (everything that was neither
+            // refunded to the sender nor tipped to the operator; this covers
+            // the base fee and any blob-gas fee). The precharge intentionally
+            // left `totalCredits` untouched so the pending refund/tip can
+            // never appear as burnable surplus while the transaction executes
+            // (e.g. via a mid-tx `burnSurplus()`); computing the burn as
+            // precharge minus refund minus tip keeps `totalCredits` equal to
+            // the sum of account credits by construction.
+            let token_refunded = context.gas_price
+                * U256::from(context.tx_gas_limit.saturating_sub(context.gas_used)); // can not overflow
+            let burned_fee = context
+                .fee_to_prepay
+                .checked_sub(token_refunded)
+                .and_then(|v| v.checked_sub(token_to_pay_operator))
+                .ok_or(internal_error!("gas tank burned fee underflow"))?;
+            syscoin_gas_tank::debit_gas_tank_total_credits(
+                system,
+                &burned_fee,
+                &mut context.intrinsic_resources,
+            )?;
+            return Ok(());
+        }
         // Operator payment native is precharged by the intrinsic formula too.
         context
             .intrinsic_resources
@@ -601,6 +714,10 @@ where
         #[cfg(feature = "verify_intrinsic_native")]
         Self::verify_intrinsic_native(system, &context);
 
+        // SYSCOIN: only the metadata-authorized Gateway commit may bind relayed edge-DA refs.
+        let collects_syscoin_edge_da_refs =
+            is_authorized_syscoin_edge_da_ref_commit_tx(system, &transaction);
+
         ZkTxResult {
             result,
             tx_hash: context.tx_hash,
@@ -614,6 +731,7 @@ where
             computational_native_used,
             pubdata_used: context.total_pubdata,
             blob_gas_used,
+            collects_syscoin_edge_da_refs, // SYSCOIN: successful pinned-target commit classification
         }
     }
 
@@ -641,6 +759,34 @@ where
             validator,
         )
     }
+}
+
+// SYSCOIN: Pinned Era V32 Gateway commit entrypoints eligible to emit compact Edge-DA refs.
+const SYSCOIN_COMMIT_BATCHES_SHARED_BRIDGE_SELECTOR: [u8; 4] = [0x0d, 0xb9, 0xeb, 0x87];
+const SYSCOIN_COMMIT_BATCHES_MULTISIG_SELECTOR: [u8; 4] = [0x09, 0x13, 0x14, 0x8a];
+
+fn is_authorized_syscoin_edge_da_ref_commit_tx<S: EthereumLikeTypes>(
+    system: &System<S>,
+    transaction: &Transaction<S::Allocator>,
+) -> bool
+where
+    S::Metadata: ZkSpecificMetadata,
+{
+    // SYSCOIN: compact edge DA refs are settlement-critical, so the proven root
+    // only follows child-chain commit transactions executed on the canonical Gateway and sent
+    // to its configured validator timelock target. Same-address calls on other chains are inert.
+    if !syscoin_compact_edge_da_enabled_on_chain(system.get_chain_id()) {
+        return false;
+    }
+    let target = syscoin_compact_edge_da_commit_target();
+    if transaction.to() != Some(target) {
+        return false;
+    }
+
+    let calldata = transaction.calldata();
+    calldata.len() >= 4
+        && (calldata[..4] == SYSCOIN_COMMIT_BATCHES_SHARED_BRIDGE_SELECTOR
+            || calldata[..4] == SYSCOIN_COMMIT_BATCHES_MULTISIG_SELECTOR)
 }
 
 impl<S: EthereumLikeTypes> ZkTransactionFlowOnlyEOA<S>
@@ -963,7 +1109,13 @@ where
         //   twice the actual consumption for an already-existing sender. Native
         //   over-budgeting is harmless when native isn't priced, so this is by
         //   design rather than a misestimate.
-        if context.authorization_list_num == 0 && context.native_per_gas != 0 {
+        // SYSCOIN: Tank settlement uses a deliberately conservative multi-slot
+        // upper bound; retain the security-critical upper-bound assertion above,
+        // but exclude this path from the diagnostic 2x lower-bound guard.
+        if context.authorization_list_num == 0
+            && context.native_per_gas != 0
+            && !context.fee_paid_from_gas_tank
+        {
             assert!(
                 formula <= actual_used * 2,
                 "intrinsic computational native formula ({}) is overcharging more than twice compared to actual consumption ({})",

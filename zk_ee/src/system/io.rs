@@ -402,6 +402,27 @@ pub trait IOSubsystemExt: IOSubsystem {
         key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
     ) -> Result<(), SystemError>;
 
+    /// SYSCOIN: Bootloader-only read of the pinned zkSYS fee ledger. Unlike
+    /// ordinary storage IO it must not warm EVM access metadata.
+    fn fee_ledger_storage_read(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+    ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, SystemError>;
+
+    /// SYSCOIN: Bootloader-only compare-and-write for the pinned fee ledger.
+    /// `rebase_evm_original` is true only for sender precharge.
+    fn fee_ledger_storage_write(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        expected_current: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        new_value: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        rebase_evm_original: bool,
+    ) -> Result<(), SystemError>;
+
     /// Perform a transfer of token balance.
     fn transfer_nominal_token_value(
         &mut self,
@@ -532,6 +553,14 @@ pub trait IOSubsystemExt: IOSubsystem {
 
     // Get number of logs emitted so far.
     fn logs_len(&self) -> u64;
+
+    // SYSCOIN: Expose strict baked-emitter relay-message analysis through the generic IO boundary
+    // so the bootloader can reject zero/malformed/duplicate messages before committing the frame.
+    fn syscoin_edge_da_relay_message_for_tx_number(
+        &self,
+        authorized_tx_number: u32,
+        canonical_relay_emitter: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+    ) -> crate::common_structs::SyscoinEdgeDaRelayMessage;
 
     /// Adds some resources to refund at the end of transaction
     fn add_to_refund_counter(&mut self, refund: Self::Resources) -> Result<(), SystemError>;

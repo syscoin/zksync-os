@@ -574,6 +574,40 @@ impl<
             .storage_touch(ee_type, resources, address, key, &mut self.oracle)
     }
 
+    // SYSCOIN: Expose the narrow fee-ledger path only on the bootloader/system
+    // extension trait, never on the user-facing IOSubsystem trait.
+    fn fee_ledger_storage_read(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+    ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, SystemError> {
+        self.storage
+            .fee_ledger_storage_read(resources, address, key, &mut self.oracle)
+    }
+
+    // SYSCOIN: Expected-current comparison makes all bootloader ledger writes
+    // fail closed; only precharge opts into EVM-original rebasing.
+    fn fee_ledger_storage_write(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        expected_current: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        new_value: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        rebase_evm_original: bool,
+    ) -> Result<(), SystemError> {
+        self.storage.fee_ledger_storage_write(
+            resources,
+            address,
+            key,
+            expected_current,
+            new_value,
+            rebase_evm_original,
+            &mut self.oracle,
+        )
+    }
+
     fn touch_account(
         &mut self,
         ee_type: ExecutionEnvironmentType,
@@ -753,6 +787,20 @@ impl<
 
     fn logs_len(&self) -> u64 {
         self.logs_storage.len()
+    }
+
+    // SYSCOIN: Delegate strict baked-emitter analysis to rollback-aware log storage while the
+    // authorized commit transaction can still be invalidated atomically.
+    fn syscoin_edge_da_relay_message_for_tx_number(
+        &self,
+        authorized_tx_number: u32,
+        canonical_relay_emitter: &ruint::aliases::B160,
+    ) -> zk_ee::common_structs::SyscoinEdgeDaRelayMessage {
+        self.logs_storage
+            .syscoin_edge_da_relay_message_for_tx_number(
+                authorized_tx_number,
+                canonical_relay_emitter,
+            )
     }
 
     fn add_to_refund_counter(&mut self, refund: Self::Resources) -> Result<(), SystemError> {

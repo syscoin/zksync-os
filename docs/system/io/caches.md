@@ -115,15 +115,22 @@ transaction ID that touched it. On access:
 
 1. `materialize_element()` always charges a warm read first via `charge_warm_storage_read()`.
 2. If the element's `last_touched_in_tx` does not match the current transaction ID
-   (i.e. the access is "cold"), it additionally charges `charge_cold_storage_read_extra()`.
-   For native resources this cold extra comes in two sizes: NEW (slot absent from the
-   tree at block start, priced for the non-inclusion check) and EXISTING. The NEW extra
-   is charged once per slot per block; which accesses pay it is tracked by the
-   `new_read_extra_charged` metadata flag (see the charging invariant below).
-3. `last_touched_in_tx` is updated to the current transaction ID, making all
-   subsequent accesses within the same transaction "warm".
-4. At the transaction boundary, `begin_new_tx()` increments the transaction ID counter,
+   (i.e. the EVM access is "cold"), it additionally charges the EVM cold-read ergs.
+3. Native cold-read work is tracked independently by
+   `native_read_extra_charged_in_tx`. Its extra comes in two sizes: NEW (slot absent
+   from the tree at block start, priced for the non-inclusion check) and EXISTING.
+   The NEW extra is charged once per slot per block; which accesses pay it is tracked
+   by the `new_read_extra_charged` metadata flag (see the charging invariant below).
+4. Ordinary EVM access updates `last_touched_in_tx`, making subsequent EVM accesses
+   within the same transaction warm.
+5. At the transaction boundary, `begin_new_tx()` increments the transaction ID counter,
    resetting all elements to "cold" for the next transaction.
+
+**SYSCOIN extension.** Bootloader fee-ledger IO preserves `last_touched_in_tx`
+while still updating the rollback-aware native marker. It therefore pays the
+prover's cold storage work without warming a slot for payload EVM code. The
+native marker uses `Option<TransactionId>`, so its default cannot alias the
+block-level system epoch at transaction ID zero.
 
 #### Charging invariant: independence from cache state
 
@@ -160,11 +167,32 @@ Regression tests: `test_dropped_tx_does_not_discount_new_slot_read` and
 
 #### EVM gas refund accounting
 
-The cache maintains a `NonEmptyHistoryCounter` of cumulative EVM refunds. Every
-`apply_write_impl()` call passes the three-value state to `refund_for_storage_write()`,
+The cache maintains a `NonEmptyHistoryCounter` of cumulative EVM refunds. Normal
+`apply_write_impl()` calls pass the three-value state to `refund_for_storage_write()`,
 which implements the EIP-3529 refund rules (e.g. +4800 gas when clearing a slot
 from non-zero to zero). The counter participates in frame snapshots, so refunds
 from reverted calls are correctly discarded.
+
+**SYSCOIN fee-ledger path.** Gas-tank reads and compare-and-writes use a narrow
+bootloader-only interface. These operations charge native storage work, preserve
+pre-existing EVM access-list warmth, and never update the EVM refund counter. A
+successful sender precharge records its post-precharge value as the payload's
+EVM-original value, while retaining the pre-transaction committed value for
+pubdata, persistence, and outer rollback.
+
+For that exact active sender-credit key, ordinary payload `SSTORE` still performs
+normal charging, state mutation, and rollback recording but suppresses refund
+deltas. Settlement may re-credit the slot after payload refund finalization, so
+granting a clear/restore refund before that late write would be unsound. All other
+keys retain standard EIP-3529 accounting.
+
+Only one sender-credit slot can be rebased per L2 transaction. The override is
+therefore a lazy, rollback-aware `HistoryCounter<Option<(key, value)>>` singleton,
+not a per-slot map. Normal `SSTORE` performs one fixed-cost singleton read and
+uses the override only when its key matches. A duplicate rebase fails before
+charging or mutating public state. The singleton history update substitutes for
+the refund-counter history update deliberately skipped by the special write and
+is covered by the same warm-storage-write native allowance.
 
 #### Three-value state tracking
 
@@ -211,11 +239,16 @@ The cache exposes two iterators for upper layers:
 
 The [`StorageAccessPolicy`](../../../basic_system/src/system_implementation/caches/storage_access_policy.rs)
 trait (parameterised by `P`) controls how gas/ergs are charged for storage
-operations. It defines four methods:
+operations. Its core methods are:
 
 - `charge_warm_storage_read` — base cost for every storage access (EVM: 100 gas).
 - `charge_cold_storage_read_extra` — additional cost on the first access in a
   transaction (EVM: 2000 gas, totalling 2100 for a cold read).
+- `charge_cold_storage_read_ergs_extra` and
+  `charge_cold_storage_read_native_extra` — **SYSCOIN** split components used by
+  slot materialisation so fee-ledger IO can preserve EVM warmth while paying
+  native cold-read work. The combined method remains unchanged for account-cache
+  callers.
 - `charge_storage_write_extra` — write cost that varies based on the value
   transition (EVM: 0 for no-change, 20000 for fresh set, 5000 for fresh reset,
   plus 100 for cold writes).
@@ -227,7 +260,8 @@ different pricing models without branching at runtime.
 #### Snapshotting
 
 The cache creates a composite `StorageSnapshotId` that bundles a `HistoryMap`
-snapshot and a refund counter snapshot. On `start_frame()` both are captured;
-on `finish_frame(Some(snapshot))` both are rolled back atomically. This ensures
-that a reverted `CALL` or `CREATE` discards both its storage changes and its
-accumulated gas refunds.
+snapshot, a refund-counter snapshot, and the **SYSCOIN** fee-ledger singleton
+snapshot. On `start_frame()` all are captured; on
+`finish_frame(Some(snapshot))` all are rolled back atomically. This ensures that
+a reverted `CALL` or `CREATE` discards its storage changes, accumulated gas
+refunds, and any fee-ledger EVM-original override created inside the frame.

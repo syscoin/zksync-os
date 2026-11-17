@@ -1,6 +1,6 @@
 # Data Availability Commitment Schemes
 
-ZKsync OS supports multiple Data Availability (DA) commitment schemes to accommodate different deployment scenarios, from full rollups using Ethereum calldata/blobs to validiums with external DA solutions. This document provides a comprehensive overview of the implemented DA commitment schemes and their technical details.
+ZKsync OS supports multiple Data Availability (DA) commitment schemes to accommodate different deployment scenarios, including Ethereum calldata, compact Syscoin Bitcoin DA, and validium-style external DA. This document provides a comprehensive overview of the implemented DA commitment schemes and their technical details.
 
 ## Overview
 
@@ -65,43 +65,40 @@ da_commitment = keccak256(
 - State diffs hash is zero-filled as legacy compatibility requirement
 
 ### 5. BlobsZKsyncOS (ID: 4)
-**Purpose**: EIP-4844 blob-based DA with optimal cost efficiency
+**Purpose**: Compact Syscoin Bitcoin DA commitment (the enum ID is retained on the wire)
 
-**Implementation**: [`BlobCommitmentGenerator`](../basic_bootloader/src/bootloader/block_flow/zk/post_tx_op/da_commitment_generator/blob_commitment_generator/mod.rs)
+**Implementation**: [`SyscoinDACommitmentGenerator`](../basic_bootloader/src/bootloader/block_flow/zk/post_tx_op/da_commitment_generator/syscoin_commitment_generator.rs)
+
+**SYSCOIN:** The upstream `BlobCommitmentGenerator` KZG implementation and its callable oracle
+remain in-tree unchanged for alignment and reviewability, but scheme ID 4 selects the compact
+generator in the Syscoin postimage.
 
 **Key Parameters**:
-- **Blob chunk size**: 31 bytes per field element
-- **Elements per blob**: 4,096 field elements (EIP-4844 standard)
-- **Encodable bytes per blob**: 126,976 bytes (31 × 4,096)
-- **Maximum blobs supported**: 9 blobs
-- **Total capacity**: 1,142,784 bytes across all blobs
+- **Data-ID chunk size**: 2 MiB
+- **Maximum chunks supported**: 32
+- **Total capacity**: 64 MiB, including the 31-byte length prefix
 
-**Blob Encoding Process**:
+**Data-ID Process**:
 
-1. **Length Encoding**: First 31 bytes encode data length as `[0, length_be_8_bytes, 23_zeros]`
-2. **Data Chunking**: Remaining data chunked into 31-byte segments
-3. **Field Element Creation**: Each chunk becomes `[0, chunk_31_bytes]` in big-endian
-4. **Blob Filling**: Field elements fill blobs sequentially
+1. **Length Encoding**: The first 31 bytes encode data length as `[length_be_8_bytes, 23_zeros]`
+2. **Data Chunking**: The prefixed bytes are split into 2 MiB chunks
+3. **Guest Computation**: The proving guest computes a 32-byte Blake2s ID for each chunk directly
 
 **Commitment Calculation**:
 ```
-For each blob:
-  1. Generate KZG commitment and proof
-  2. Calculate versioned_hash = keccak256(0x01 || kzg_commitment)
-  3. Verify KZG proof using polynomial evaluation
+For each chunk:
+  data_id = blake2s(chunk)
 
-final_commitment = keccak256(all_versioned_hashes)
+final_commitment = keccak256(all_data_ids)
 ```
 
-**Polynomial Evaluation**:
-- Uses BLS12-381 curve arithmetic
-- Evaluation point derived from `blake2s(versioned_hash || blob_data)` (truncated to 128 bits)
-- Supports polynomial interpolation over the blob data
-
 **Use Case**:
-- EIP-4844 enabled Ethereum rollups
-- Cost-optimized for large amounts of pubdata
-- Up to ~90% cost reduction compared to calldata
+- Syscoin's compact Bitcoin DA publication path
+- A proving statement that binds the published bytes to the exact data IDs committed through
+  Gateway and L1
+
+This DA commitment path is independent of EVM Cancun compatibility. The EIP-4844 transaction
+format and point-evaluation precompile remain available to contracts.
 
 ## DA Commitment Generation Process
 
@@ -124,7 +121,7 @@ impl WriteBytes for Generator {
 ### 3. Finalization
 ```rust
 impl DACommitmentGenerator for Generator {
-    fn finalize(&mut self, oracle: &mut Oracle) -> Bytes32 {
+    fn finalize(&mut self) -> Bytes32 {
         // Generate final commitment
     }
 }
@@ -139,4 +136,4 @@ impl DACommitmentGenerator for Generator {
 - **Core Types**: `zk_ee/src/common_structs/da_commitment_scheme.rs`
 - **Generators**: `basic_bootloader/src/bootloader/block_flow/zk/post_tx_op/da_commitment_generator/`
 - **Blob Implementation**: `basic_bootloader/src/bootloader/block_flow/zk/post_tx_op/da_commitment_generator/blob_commitment_generator/`
-- **Testing**: `tests/instances/unit/src/kzg_blobs.rs`
+- **Testing**: unit tests beside the blob commitment generator

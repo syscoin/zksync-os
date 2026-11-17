@@ -43,6 +43,9 @@ use zk_ee::internal_error;
 use zk_ee::system::base_system_functions::Blake2FPrecompileErrors;
 use zk_ee::system::base_system_functions::Bls12PrecompileErrors;
 use zk_ee::system::base_system_functions::P256VerifyErrors;
+// SYSCOIN: Error plumbing for the optional fixed-parameter verifier hook at 0x101.
+#[cfg(feature = "slh_dsa_precompile")]
+use zk_ee::system::base_system_functions::SlhDsaSha212824VerifyErrors;
 use zk_ee::system::errors::internal::InternalError;
 use zk_ee::system::errors::subsystem::SubsystemError;
 use zk_ee::{
@@ -226,6 +229,17 @@ where
             <S::SystemFunctions as SystemFunctions<_>>::P256Verify,
             P256VerifyErrors,
         >(hooks, P256_VERIFY_PREHASH_HOOK_ADDRESS_LOW)?;
+    }
+
+    #[cfg(feature = "slh_dsa_precompile")]
+    {
+        // SYSCOIN: fixed-parameter SLH-DSA-SHA2-128-24 verifier at 0x101.
+        add_precompile::<
+            _,
+            _,
+            <S::SystemFunctions as SystemFunctions<_>>::SlhDsaSha212824Verify,
+            SlhDsaSha212824VerifyErrors,
+        >(hooks, SLH_DSA_SHA2_128_24_VERIFY_HOOK_ADDRESS_LOW)?;
     }
 
     {

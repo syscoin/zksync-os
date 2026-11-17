@@ -38,6 +38,7 @@ use zksync_os_tests_common::zksync_tx::ZKsyncSpecificTxEnvelope;
 use zksync_os_tests_common::zksync_tx::ZKsyncTxEnvelope;
 
 mod asset_tracker;
+mod gas_tank; // SYSCOIN: full-transaction zkSYS fee-ledger fixtures
 mod l1_tx_resilience;
 mod native_charging;
 // Per-transaction memory budget of the block-scoped raw preimage cache.

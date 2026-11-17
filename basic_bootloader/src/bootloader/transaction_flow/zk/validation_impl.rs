@@ -527,8 +527,13 @@ where
         resources_before_refund: S::Resources::empty(),
         intrinsic_resources,
         intrinsic_computational_native,
+        // SYSCOIN: Starts at the ordinary L2 bound; successful tank precharge
+        // conditionally adds its storage-diff allowance.
+        intrinsic_pubdata,
         authorization_list_num,
         statement_versioned_hashes_num,
+        // SYSCOIN: decided in `precharge_fee` after validation completes.
+        fee_paid_from_gas_tank: false,
     })
 }
 

@@ -15,6 +15,7 @@ zksync_os_tests_common = { path = "../../common" }
 hex = { workspace = true }
 cycle_marker = { path = "../../../cycle_marker" }
 forward_system = { path = "../../../forward_system" }
+sha2 = "0.10" # SYSCOIN: authenticate the checked SLH-DSA KAT fixture.
 
 [features]
 cycle_marker = ["rig/cycle_marker"]

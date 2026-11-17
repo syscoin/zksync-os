@@ -1,7 +1,10 @@
 use alloc::vec::Vec;
+// SYSCOIN: Retain bounded, guest-validated compact-ref hashes per block.
+use arrayvec::ArrayVec;
 use core::alloc::Allocator;
 use crypto::blake2s::Blake2s256;
 use crypto::MiniDigest;
+use zk_ee::common_structs::logs_storage::SYSCOIN_DA_MAX_REFS_PER_BATCH;
 use zk_ee::common_structs::merkle_root_in_place;
 use zk_ee::common_structs::skip_list_quasi_vec::ListVec;
 use zk_ee::memory::stack_trait::Stack;
@@ -9,6 +12,10 @@ use zk_ee::utils::Bytes32;
 
 /// Height of the per-block transaction/receipt Merkle trees.
 pub const ZK_BLOCK_TX_TREE_DEPTH: usize = 32;
+
+// SYSCOIN: every retained Gateway commit must contribute exactly one non-empty relay message, so
+// the batch's 32-ref ceiling also bounds the number of prevalidated message hashes retained here.
+const SYSCOIN_EDGE_DA_REF_HASH_CAPACITY: usize = SYSCOIN_DA_MAX_REFS_PER_BATCH as usize;
 
 /// Empty-subtree hashes for the per-block tx/receipt Merkle tree, where entry
 /// `i` is the root of an empty subtree of height `i`. The empty leaf is the zero
@@ -227,6 +234,10 @@ pub struct ZKBasicBlockDataKeeper<EA: TxHashesAccumulator, A: Allocator + Clone 
     pub block_computational_native_used: u64,
     /// Amount of blob gas used in the block
     pub block_blob_gas_used: u64,
+    /// SYSCOIN: ordered hashes of exactly-one baked-relay messages validated before tx commit.
+    pub syscoin_compact_edge_da_ref_hashes: ArrayVec<Bytes32, SYSCOIN_EDGE_DA_REF_HASH_CAPACITY>,
+    /// SYSCOIN: canonical Bitcoin-DA hashes forwarded by accepted commit txs in this block.
+    pub syscoin_compact_edge_da_ref_count: u32,
 }
 
 // Manual `Debug` (like `EthereumBasicTransactionDataKeeper`) so the allocator
@@ -254,6 +265,15 @@ impl<EA: TxHashesAccumulator + core::fmt::Debug, A: Allocator + Clone + Default>
                 &self.block_computational_native_used,
             )
             .field("block_blob_gas_used", &self.block_blob_gas_used)
+            // SYSCOIN: Include settlement-critical compact-ref tracking in diagnostic state.
+            .field(
+                "syscoin_compact_edge_da_ref_hashes",
+                &self.syscoin_compact_edge_da_ref_hashes,
+            )
+            .field(
+                "syscoin_compact_edge_da_ref_count",
+                &self.syscoin_compact_edge_da_ref_count,
+            )
             .finish()
     }
 }
@@ -272,6 +292,9 @@ impl<EA: TxHashesAccumulator, A: Allocator + Clone + Default> ZKBasicBlockDataKe
             block_pubdata_used: 0,
             block_computational_native_used: 0,
             block_blob_gas_used: 0,
+            // SYSCOIN: Every block starts with no prevalidated relay-message hashes or refs.
+            syscoin_compact_edge_da_ref_hashes: ArrayVec::new(),
+            syscoin_compact_edge_da_ref_count: 0,
         }
     }
 
@@ -290,6 +313,10 @@ pub trait TxHashesAccumulator {
 
     /// Adds a new transaction hash to the accumulator.
     fn add_tx_hash(&mut self, tx_hash: &Bytes32);
+
+    // SYSCOIN: every accumulator must state whether it carries prior-block edge-DA refs.
+    // Requiring an implementation makes a new multiblock accumulator fail closed at compile time.
+    fn syscoin_edge_da_ref_count(&self) -> u32;
 }
 
 #[derive(Debug)]
@@ -301,12 +328,22 @@ impl TxHashesAccumulator for NopTxHashesAccumulator {
     }
 
     fn add_tx_hash(&mut self, _tx_hash: &Bytes32) {}
+
+    // SYSCOIN: Stateless single-block accumulators cannot carry refs from a prior block.
+    fn syscoin_edge_da_ref_count(&self) -> u32 {
+        0
+    }
 }
 
 impl TxHashesAccumulator for () {
     fn empty() -> Self {}
 
     fn add_tx_hash(&mut self, _tx_hash: &Bytes32) {}
+
+    // SYSCOIN: The unit accumulator has no cross-block compact-ref state.
+    fn syscoin_edge_da_ref_count(&self) -> u32 {
+        0
+    }
 }
 
 /// Rolling Keccak256 hash accumulator for transaction hashes.
@@ -339,6 +376,11 @@ impl TxHashesAccumulator for TransactionsRollingKeccakHasher {
         });
         self.count += 1;
     }
+
+    // SYSCOIN: This single-block transaction hasher does not retain forwarded refs.
+    fn syscoin_edge_da_ref_count(&self) -> u32 {
+        0
+    }
 }
 
 impl TransactionsRollingKeccakHasher {
@@ -366,6 +408,11 @@ impl TxHashesAccumulator for AccumulatingBlake2sTransactionsHasher {
 
     fn add_tx_hash(&mut self, tx_hash: &Bytes32) {
         self.hasher.update(tx_hash.as_u8_array_ref());
+    }
+
+    // SYSCOIN: This single-block transaction hasher does not retain forwarded refs.
+    fn syscoin_edge_da_ref_count(&self) -> u32 {
+        0
     }
 }
 

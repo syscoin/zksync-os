@@ -22,7 +22,8 @@ pub enum DACommitmentScheme {
     /// This commitment includes EIP-4844 blobs data. Used by default RollupL1DAValidator.
     /// With ZKsync OS it always outputs 1 0-hash blob, as separate commitment used for blobs.
     BlobsAndPubdataKeccak256,
-    /// Keccak of blob versioned hashes filled with pubdata.
+    /// SYSCOIN: Keccak of ordered compact Bitcoin-DA Blake2s data IDs. The enum ID is retained
+    /// on the wire for compatibility with the settlement contracts.
     BlobsZKsyncOS,
 }
 

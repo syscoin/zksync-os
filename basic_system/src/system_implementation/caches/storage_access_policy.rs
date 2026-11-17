@@ -11,9 +11,25 @@ pub trait StorageAccessPolicy<R: Resources, V>: 'static + Sized {
         resources: &mut R,
     ) -> Result<(), SystemError>;
 
-    /// Charge the extra cost of reading a key
-    /// not present in the cache. This cost is added
-    /// to the cost of a warm read.
+    /// SYSCOIN: Charge only the EE part of a cold storage read. Keeping this
+    /// separate from the native part lets bootloader fee-ledger IO account for
+    /// prover work without changing EIP-2929 warmth.
+    fn charge_cold_storage_read_ergs_extra(
+        &self,
+        ee_type: ExecutionEnvironmentType,
+        resources: &mut R,
+    ) -> Result<(), SystemError>;
+
+    /// SYSCOIN: Charge only the native part of a cold storage read.
+    fn charge_cold_storage_read_native_extra(
+        &self,
+        resources: &mut R,
+        is_new_slot: bool,
+    ) -> Result<(), SystemError>;
+
+    /// SYSCOIN: Charge the complete cold-read extra. Account-cache callers still need
+    /// the combined operation, while slot storage tracks EE warmth and native
+    /// admission independently.
     fn charge_cold_storage_read_extra(
         &self,
         ee_type: ExecutionEnvironmentType,

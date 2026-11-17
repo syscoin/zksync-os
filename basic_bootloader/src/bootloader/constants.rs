@@ -2,13 +2,15 @@ use basic_system::cost_constants::{
     blake2s_native_cost, ECRECOVER_NATIVE_COST, KECCAK256_CHUNK_SIZE, KECCAK256_ROUND_NATIVE_COST,
 };
 use basic_system::system_functions::keccak256::keccak256_native_cost_for_rounds_u64;
-use basic_system::system_implementation::flat_storage_model::cost_constants::COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST;
+// SYSCOIN: Gas-tank resource bounds use the same canonical storage-model cost constants as the
+// system mutation path they constrain.
 use basic_system::system_implementation::flat_storage_model::cost_constants::{
     ACCOUNT_PERSIST_EXISTING_WRITE_NATIVE_COST, ACCOUNT_PERSIST_NEW_WRITE_NATIVE_COST,
-    COLD_EXISTING_STORAGE_READ_NATIVE_COST, COLD_NEW_STORAGE_READ_NATIVE_COST,
+    COLD_EXISTING_STORAGE_READ_NATIVE_COST, COLD_EXISTING_STORAGE_WRITE_EXTRA_NATIVE_COST,
+    COLD_NEW_STORAGE_READ_NATIVE_COST, COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST,
     EVENT_STORAGE_BASE_NATIVE_COST, PREIMAGE_CACHE_GET_NATIVE_COST, PREIMAGE_CACHE_SET_NATIVE_COST,
     WARM_ACCOUNT_CACHE_ACCESS_NATIVE_COST, WARM_ACCOUNT_CACHE_WRITE_EXTRA_NATIVE_COST,
-    WARM_STORAGE_READ_NATIVE_COST,
+    WARM_STORAGE_READ_NATIVE_COST, WARM_STORAGE_WRITE_EXTRA_NATIVE_COST,
 };
 use basic_system::system_implementation::flat_storage_model::AccountProperties;
 use evm_interpreter::native_resource_constants::COPY_BYTE_NATIVE_COST;
@@ -273,6 +275,62 @@ const SENDER_ACCOUNT_INTRINSIC_PUBDATA: u64 = 32 /*key*/ + 1 /*account metadata*
 pub const L2_TX_INTRINSIC_PUBDATA: u64 =
     SENDER_ACCOUNT_INTRINSIC_PUBDATA + COINBASE_BALANCE_INTRINSIC_PUBDATA;
 
+// SYSCOIN: worst-case pubdata for zkSYS gas-tank fee payment: three
+// storage-slot diffs (sender credit, coinbase credit, total credits), each
+// priced as a 32-byte key plus a 34-byte uncompressed value update, matching
+// the worst-case convention of COINBASE_BALANCE_INTRINSIC_PUBDATA.
+pub const SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA: u64 = 3 * (32 + 34);
+
+// SYSCOIN: one Solidity mapping-key hash consumes one Keccak permutation for
+// the fixed 64-byte `pad32(address) || pad32(slot)` preimage.
+pub const SYSCOIN_GAS_TANK_MAPPING_KEY_KECCAK_NATIVE_COST: u64 =
+    keccak256_native_cost_for_rounds_u64(1);
+
+// SYSCOIN: Native work needed just to probe whether the sender can use the
+// gas tank. The slot may be new when the sender has no credit, so fallback
+// transactions reserve the worst-case cold-new read plus one mapping Keccak.
+pub const SYSCOIN_GAS_TANK_PROBE_COMPUTATIONAL_NATIVE_COST: u64 = WARM_STORAGE_READ_NATIVE_COST
+    + COLD_NEW_STORAGE_READ_NATIVE_COST
+    + SYSCOIN_GAS_TANK_MAPPING_KEY_KECCAK_NATIVE_COST;
+
+// SYSCOIN: Native intrinsic work in the ordinary SYS fee path that a
+// successful tank payment replaces: sender precharge/refund, coinbase credit,
+// and the coinbase account persist induced by that credit.
+pub const SYSCOIN_NATIVE_FEE_INTRINSIC_COMPUTATIONAL_NATIVE_COST: u64 =
+    3 * ACCOUNT_UPDATE_COST + ACCOUNT_PERSIST_EXISTING_NATIVE_COST;
+
+// SYSCOIN: Consensus upper bound for a successful tank-paid transaction with
+// distinct sender and coinbase, and nonzero refund, tip, and burned fee. The
+// path performs nine charged reads (five explicit plus one in each write),
+// four writes and three mapping-key hashes:
+// - sender credit: cold-existing read/write, then warm refund read/write;
+// - totalCredits: cold-existing read, then warm settlement read/write;
+// - coinbase credit: worst-case cold-new read/write.
+// A successful precharge proves sender credit and totalCredits are nonzero, so
+// treating those slots as existing is exact; only coinbase may be new.
+pub const SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_COST: u64 = 9
+    * WARM_STORAGE_READ_NATIVE_COST
+    + 4 * WARM_STORAGE_WRITE_EXTRA_NATIVE_COST
+    + 2 * COLD_EXISTING_STORAGE_READ_NATIVE_COST
+    + COLD_NEW_STORAGE_READ_NATIVE_COST
+    + 2 * COLD_EXISTING_STORAGE_WRITE_EXTRA_NATIVE_COST
+    + COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST
+    + 3 * SYSCOIN_GAS_TANK_MAPPING_KEY_KECCAK_NATIVE_COST;
+
+// SYSCOIN: After the P-only probe succeeds, reserve exactly the delta needed
+// to transform `base + P` into `base - N + T`.
+pub const SYSCOIN_GAS_TANK_CONDITIONAL_COMPUTATIONAL_NATIVE_COST: u64 =
+    SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_COST
+        - SYSCOIN_NATIVE_FEE_INTRINSIC_COMPUTATIONAL_NATIVE_COST
+        - SYSCOIN_GAS_TANK_PROBE_COMPUTATIONAL_NATIVE_COST;
+
+// SYSCOIN: Guard the dynamic-accounting identity at compile time.
+const _: () = assert!(
+    SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_COST
+        >= SYSCOIN_NATIVE_FEE_INTRINSIC_COMPUTATIONAL_NATIVE_COST
+            + SYSCOIN_GAS_TANK_PROBE_COMPUTATIONAL_NATIVE_COST
+);
+
 /// L2 tx authorization intrinsic pubdata.
 pub const L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION: u64 = // Full diff compression:
     32 + // key
@@ -377,7 +435,17 @@ pub const BLOCK_INTRINSIC_NATIVE: u64 =
 
 #[cfg(test)]
 mod tests {
-    use super::{L2_TX_AUTHORIZATION_MAX_RLP_BYTES, L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION};
+    use super::{
+        COLD_EXISTING_STORAGE_READ_NATIVE_COST, COLD_EXISTING_STORAGE_WRITE_EXTRA_NATIVE_COST,
+        COLD_NEW_STORAGE_READ_NATIVE_COST, COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST,
+        L2_TX_AUTHORIZATION_MAX_RLP_BYTES, L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION,
+        SYSCOIN_GAS_TANK_CONDITIONAL_COMPUTATIONAL_NATIVE_COST,
+        SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_COST, SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA,
+        SYSCOIN_GAS_TANK_MAPPING_KEY_KECCAK_NATIVE_COST,
+        SYSCOIN_GAS_TANK_PROBE_COMPUTATIONAL_NATIVE_COST,
+        SYSCOIN_NATIVE_FEE_INTRINSIC_COMPUTATIONAL_NATIVE_COST, WARM_STORAGE_READ_NATIVE_COST,
+        WARM_STORAGE_WRITE_EXTRA_NATIVE_COST,
+    };
 
     #[test]
     fn l2_authorization_max_rlp_length_matches_field_encoding() {
@@ -409,5 +477,33 @@ mod tests {
             L2_TX_INTRINSIC_PUBDATA_PER_AUTHORIZATION,
             32 + 1 + 8 + 2 + 1 + 4 + DELEGATION_DESIGNATOR_LEN + 4
         );
+    }
+
+    // SYSCOIN: Stage P followed by D must select exactly base - N + T.
+    #[test]
+    fn gas_tank_dynamic_native_accounting_identity_holds() {
+        assert_eq!(
+            SYSCOIN_GAS_TANK_PROBE_COMPUTATIONAL_NATIVE_COST
+                + SYSCOIN_GAS_TANK_CONDITIONAL_COMPUTATIONAL_NATIVE_COST,
+            SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_COST
+                - SYSCOIN_NATIVE_FEE_INTRINSIC_COMPUTATIONAL_NATIVE_COST,
+        );
+    }
+
+    // SYSCOIN: Lock the successful worst-case path at exactly 9 reads,
+    // 4 writes, 3 mapping Keccaks, and three 66-byte storage diffs.
+    #[test]
+    fn gas_tank_success_bound_matches_operation_inventory() {
+        assert_eq!(
+            SYSCOIN_GAS_TANK_INTRINSIC_COMPUTATIONAL_NATIVE_COST,
+            9 * WARM_STORAGE_READ_NATIVE_COST
+                + 4 * WARM_STORAGE_WRITE_EXTRA_NATIVE_COST
+                + 2 * COLD_EXISTING_STORAGE_READ_NATIVE_COST
+                + COLD_NEW_STORAGE_READ_NATIVE_COST
+                + 2 * COLD_EXISTING_STORAGE_WRITE_EXTRA_NATIVE_COST
+                + COLD_NEW_STORAGE_WRITE_EXTRA_NATIVE_COST
+                + 3 * SYSCOIN_GAS_TANK_MAPPING_KEY_KECCAK_NATIVE_COST
+        );
+        assert_eq!(SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA, 3 * (32 + 34));
     }
 }

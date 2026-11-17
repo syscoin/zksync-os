@@ -24,6 +24,46 @@ use ruint::aliases::U256;
 pub const L2_TO_L1_LOG_SERIALIZE_SIZE: usize = 88;
 // Taken from the size of the Merkle tree.
 pub const MAX_NUMBER_OF_LOGS: u64 = 16_384;
+// SYSCOIN: compact RelayedSLDAValidator message version for edge DA refs.
+const SYSCOIN_RELAYED_EDGE_DA_VALIDATOR_VERSION: u8 = 1;
+const SYSCOIN_EDGE_DA_REFS_DOMAIN: &[u8] = b"SYSCOIN_EDGE_DA_REFS_V1";
+// SYSCOIN: One Gateway batch may forward at most the same 32 Bitcoin-DA openings accepted
+// by a direct Syscoin DA batch; this is enforced per message and cumulatively by the guest.
+pub const SYSCOIN_DA_MAX_REFS_PER_BATCH: u32 = 32;
+const ABI_WORD: usize = 32;
+const SYSCOIN_EDGE_DA_REF_HEAD_BYTES: usize = ABI_WORD * 5;
+
+/// SYSCOIN: fail-closed classification of the canonical relay's raw message set for one
+/// authorized Gateway commit transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyscoinEdgeDaRelayMessage {
+    /// No message was emitted by the baked relay address.
+    Missing,
+    /// Exactly one raw relay message was present, but its envelope or commitment was invalid.
+    Malformed,
+    /// More than one raw message was emitted by the baked relay, regardless of message validity.
+    Duplicate,
+    /// Exactly one canonical non-empty message was emitted by the baked relay.
+    Valid { ref_count: u32, ref_hash: Bytes32 },
+}
+
+/// SYSCOIN: extend the proven ordered Edge-DA root with already validated relay-message hashes.
+pub fn apply_syscoin_edge_da_ref_hashes(root: &mut Bytes32, ref_hashes: &[Bytes32]) {
+    for ref_hash in ref_hashes {
+        let mut hasher = crypto::sha3::Keccak256::new();
+        hasher.update(root.as_u8_ref());
+        hasher.update(ref_hash.as_u8_ref());
+        *root = hasher.finalize().into();
+    }
+}
+
+/// SYSCOIN: construct a fresh ordered Edge-DA root from hashes validated while each transaction
+/// was still rollback-capable.
+pub fn syscoin_edge_da_refs_root_from_hashes(ref_hashes: &[Bytes32]) -> Bytes32 {
+    let mut root = Bytes32::ZERO;
+    apply_syscoin_edge_da_ref_hashes(&mut root, ref_hashes);
+    root
+}
 
 /// Height of the L2->L1 logs Merkle tree (capacity `2^14 == 16_384` leaves).
 pub const L2_TO_L1_LOG_TREE_HEIGHT: usize = 14;
@@ -354,6 +394,58 @@ impl<SF: StackFactory<M>, const M: usize, A: Allocator + Clone + Default> LogsSt
         }
     }
 
+    pub fn syscoin_edge_da_relay_message_for_tx_number(
+        &self,
+        authorized_tx_number: u32,
+        canonical_relay_emitter: &B160,
+    ) -> SyscoinEdgeDaRelayMessage {
+        // SYSCOIN: Bind admission to exactly one *raw* message from the baked relay while the
+        // transaction frame can still be rolled back. Canonical-looking messages from any other
+        // emitter are deliberately ignored; malformed relay messages are never silently skipped.
+        let mut canonical_message = None;
+        // SYSCOIN: Retained logs are ordered by transaction number. Start at the current tail
+        // so checking every Gateway transaction cannot repeatedly scan earlier transactions.
+        for message in self.list.iter_rev() {
+            if message.tx_number > authorized_tx_number {
+                continue;
+            }
+            if message.tx_number < authorized_tx_number {
+                break;
+            }
+            let GenericLogContentData::UserMsg(UserMsgData { address, data, .. }) = &message.data
+            else {
+                continue;
+            };
+            if address != canonical_relay_emitter {
+                continue;
+            }
+            if canonical_message.is_some() {
+                return SyscoinEdgeDaRelayMessage::Duplicate;
+            }
+            canonical_message = Some(data.as_slice());
+        }
+
+        let Some(message) = canonical_message else {
+            return SyscoinEdgeDaRelayMessage::Missing;
+        };
+        let Some(ref_count) = syscoin_edge_da_ref_count(message) else {
+            return SyscoinEdgeDaRelayMessage::Malformed;
+        };
+        // SYSCOIN: A single relay message may never exceed the same opening cap enforced for the
+        // whole Gateway batch. Keeping the parser result out of the root on failure is fail-closed.
+        if ref_count > SYSCOIN_DA_MAX_REFS_PER_BATCH {
+            return SyscoinEdgeDaRelayMessage::Malformed;
+        }
+        let Some(ref_hash) = syscoin_edge_da_ref_hash(message) else {
+            return SyscoinEdgeDaRelayMessage::Malformed;
+        };
+
+        SyscoinEdgeDaRelayMessage::Valid {
+            ref_count,
+            ref_hash,
+        }
+    }
+
     pub fn calculate_pubdata_used_by_tx(&self) -> Result<u32, InternalError> {
         let total_pubdata_used = self.list.top().map_or(0, |(_, m)| *m);
 
@@ -500,5 +592,525 @@ impl<A: Allocator> From<&LogContent<A>> for L2ToL1Log {
             key,
             value,
         }
+    }
+}
+
+// SYSCOIN: authenticate the canonical shape and commitment relation of
+// abi.encode(uint8 version, uint256 chainId, uint256 batchNumber,
+// bytes32 daCommitment, bytes blobHashes) emitted by the compact Gateway DA validator.
+fn syscoin_edge_da_ref_count(message: &[u8]) -> Option<u32> {
+    if message.len() < SYSCOIN_EDGE_DA_REF_HEAD_BYTES + ABI_WORD {
+        return None;
+    }
+    if message[..31] != [0u8; 31] || message[31] != SYSCOIN_RELAYED_EDGE_DA_VALIDATOR_VERSION {
+        return None;
+    }
+    // SYSCOIN: server and settlement contracts represent chain/batch identifiers as u64;
+    // reject a wider ABI word in-guest so no proven message becomes host-unparseable later.
+    if message[ABI_WORD..ABI_WORD + 24] != [0u8; 24]
+        || message[ABI_WORD * 2..ABI_WORD * 2 + 24] != [0u8; 24]
+    {
+        return None;
+    }
+    let blob_hashes_offset = u256_word_to_usize(&message[ABI_WORD * 4..ABI_WORD * 5])?;
+    if blob_hashes_offset != SYSCOIN_EDGE_DA_REF_HEAD_BYTES {
+        return None;
+    }
+    let blob_hashes_len_offset = blob_hashes_offset;
+    let blob_hashes_start = blob_hashes_len_offset + ABI_WORD;
+    if message.len() < blob_hashes_start {
+        return None;
+    }
+    let blob_hashes_len = u256_word_to_usize(&message[blob_hashes_len_offset..blob_hashes_start])?;
+    if blob_hashes_len == 0 || blob_hashes_len % ABI_WORD != 0 {
+        return None;
+    }
+    let blob_hashes_end = blob_hashes_start.checked_add(blob_hashes_len)?;
+    if message.len() != blob_hashes_end {
+        return None;
+    }
+
+    let mut commitment_hasher = crypto::sha3::Keccak256::new();
+    commitment_hasher.update(&message[blob_hashes_start..blob_hashes_end]);
+    let actual_commitment: Bytes32 = commitment_hasher.finalize().into();
+    if message[ABI_WORD * 3..ABI_WORD * 4] != *actual_commitment.as_u8_array_ref() {
+        return None;
+    }
+
+    u32::try_from(blob_hashes_len / ABI_WORD).ok()
+}
+
+fn syscoin_edge_da_ref_hash(message: &[u8]) -> Option<Bytes32> {
+    let blob_count = syscoin_edge_da_ref_count(message)?;
+    if blob_count > SYSCOIN_DA_MAX_REFS_PER_BATCH {
+        return None;
+    }
+    let blob_hashes_len = usize::try_from(blob_count).ok()?.checked_mul(ABI_WORD)?;
+    let blob_hashes_start = SYSCOIN_EDGE_DA_REF_HEAD_BYTES + ABI_WORD;
+    let blob_hashes_end = blob_hashes_start.checked_add(blob_hashes_len)?;
+
+    let mut hasher = crypto::sha3::Keccak256::new();
+    hasher.update(SYSCOIN_EDGE_DA_REFS_DOMAIN);
+    hasher.update(&message[ABI_WORD..ABI_WORD * 4]);
+    hasher.update(U256::from(blob_count).to_be_bytes::<32>());
+    hasher.update(&message[blob_hashes_start..blob_hashes_end]);
+    Some(hasher.finalize().into())
+}
+
+fn u256_word_to_usize(word: &[u8]) -> Option<usize> {
+    if word.len() != ABI_WORD || word[..24] != [0u8; 24] {
+        return None;
+    }
+    usize::try_from(u64::from_be_bytes(word[24..].try_into().ok()?)).ok()
+}
+
+#[cfg(test)]
+// SYSCOIN: Canonical Edge-DA envelope parsing, bounds, ordering, and authorization coverage.
+mod tests {
+    use super::*;
+    use crate::common_structs::skip_list_quasi_vec::ListVec;
+    use crate::memory::stack_implementations::vec_stack::VecStackFactory;
+
+    struct ListVecStackFactory;
+
+    impl StackFactory<2> for ListVecStackFactory {
+        type Stack<T: Sized, const N: usize, A: Allocator + Clone> = ListVec<T, N, A>;
+
+        fn new_in<T, A: Allocator + Clone>(allocator: A) -> Self::Stack<T, 2, A> {
+            ListVec::new_in(allocator)
+        }
+    }
+
+    fn edge_da_message(
+        chain_id: U256,
+        batch_number: U256,
+        da_commitment: [u8; 32],
+        blob_hashes: &[[u8; 32]],
+    ) -> alloc::vec::Vec<u8> {
+        let mut message = alloc::vec::Vec::with_capacity(
+            SYSCOIN_EDGE_DA_REF_HEAD_BYTES + ABI_WORD + blob_hashes.len() * ABI_WORD,
+        );
+        let mut version = [0u8; ABI_WORD];
+        version[ABI_WORD - 1] = SYSCOIN_RELAYED_EDGE_DA_VALIDATOR_VERSION;
+        message.extend_from_slice(&version);
+        message.extend_from_slice(&chain_id.to_be_bytes::<32>());
+        message.extend_from_slice(&batch_number.to_be_bytes::<32>());
+        message.extend_from_slice(&da_commitment);
+        message.extend_from_slice(&U256::from(SYSCOIN_EDGE_DA_REF_HEAD_BYTES).to_be_bytes::<32>());
+        message.extend_from_slice(&U256::from(blob_hashes.len() * ABI_WORD).to_be_bytes::<32>());
+        for blob_hash in blob_hashes {
+            message.extend_from_slice(blob_hash);
+        }
+        message
+    }
+
+    fn edge_da_commitment(blob_hashes: &[[u8; 32]]) -> [u8; 32] {
+        let mut hasher = crypto::sha3::Keccak256::new();
+        for blob_hash in blob_hashes {
+            hasher.update(blob_hash);
+        }
+        hasher.finalize()
+    }
+
+    fn expected_edge_da_ref_hash(
+        chain_id: U256,
+        batch_number: U256,
+        da_commitment: [u8; 32],
+        blob_hashes: &[[u8; 32]],
+    ) -> Bytes32 {
+        let mut hasher = crypto::sha3::Keccak256::new();
+        hasher.update(SYSCOIN_EDGE_DA_REFS_DOMAIN);
+        hasher.update(chain_id.to_be_bytes::<32>());
+        hasher.update(batch_number.to_be_bytes::<32>());
+        hasher.update(da_commitment);
+        hasher.update(U256::from(blob_hashes.len()).to_be_bytes::<32>());
+        for blob_hash in blob_hashes {
+            hasher.update(blob_hash);
+        }
+        hasher.finalize().into()
+    }
+
+    fn extend_root(root: Bytes32, edge_ref_hash: Bytes32) -> Bytes32 {
+        let mut hasher = crypto::sha3::Keccak256::new();
+        hasher.update(root.as_u8_ref());
+        hasher.update(edge_ref_hash.as_u8_ref());
+        hasher.finalize().into()
+    }
+
+    #[test]
+    fn syscoin_edge_da_ref_parser_authenticates_canonical_encoding() {
+        let chain_id = U256::from(57u64);
+        let batch_number = U256::from(91u64);
+        let blob_hashes = [[0x22; 32], [0x33; 32]];
+        let commitment = edge_da_commitment(&blob_hashes);
+        let message = edge_da_message(chain_id, batch_number, commitment, &blob_hashes);
+
+        assert_eq!(
+            syscoin_edge_da_ref_hash(&message),
+            Some(expected_edge_da_ref_hash(
+                chain_id,
+                batch_number,
+                commitment,
+                &blob_hashes,
+            ))
+        );
+
+        let mut wrong_version = message.clone();
+        wrong_version[ABI_WORD - 1] += 1;
+        assert_eq!(syscoin_edge_da_ref_hash(&wrong_version), None);
+
+        let mut wrong_offset = message.clone();
+        wrong_offset[ABI_WORD * 5 - 1] -= ABI_WORD as u8;
+        assert_eq!(syscoin_edge_da_ref_hash(&wrong_offset), None);
+
+        let oversized_chain = edge_da_message(
+            U256::from(u64::MAX) + U256::ONE,
+            batch_number,
+            commitment,
+            &blob_hashes,
+        );
+        assert_eq!(syscoin_edge_da_ref_count(&oversized_chain), None);
+
+        let oversized_batch = edge_da_message(
+            chain_id,
+            U256::from(u64::MAX) + U256::ONE,
+            commitment,
+            &blob_hashes,
+        );
+        assert_eq!(syscoin_edge_da_ref_count(&oversized_batch), None);
+
+        let mut unaligned_length = message.clone();
+        unaligned_length[ABI_WORD * 6 - 1] += 1;
+        unaligned_length.push(0);
+        assert_eq!(syscoin_edge_da_ref_hash(&unaligned_length), None);
+
+        let mut trailing_byte = message;
+        trailing_byte.push(0);
+        assert_eq!(syscoin_edge_da_ref_hash(&trailing_byte), None);
+
+        let commitment_mismatch = edge_da_message(chain_id, batch_number, [0x11; 32], &blob_hashes);
+        assert_eq!(syscoin_edge_da_ref_count(&commitment_mismatch), None);
+        assert_eq!(syscoin_edge_da_ref_hash(&commitment_mismatch), None);
+
+        let exact_limit_hashes = [[0x44; 32]; SYSCOIN_DA_MAX_REFS_PER_BATCH as usize];
+        let exact_limit = edge_da_message(
+            chain_id,
+            batch_number,
+            edge_da_commitment(&exact_limit_hashes),
+            &exact_limit_hashes,
+        );
+        assert_eq!(
+            syscoin_edge_da_ref_count(&exact_limit),
+            Some(SYSCOIN_DA_MAX_REFS_PER_BATCH)
+        );
+        assert!(syscoin_edge_da_ref_hash(&exact_limit).is_some());
+
+        let over_limit_hashes = [[0x55; 32]; SYSCOIN_DA_MAX_REFS_PER_BATCH as usize + 1];
+        let over_limit = edge_da_message(
+            chain_id,
+            batch_number,
+            edge_da_commitment(&over_limit_hashes),
+            &over_limit_hashes,
+        );
+        // SYSCOIN: The count remains observable to the tx loop so it can classify and roll back
+        // the overflowing transaction, while the root builder refuses to prove it.
+        assert_eq!(
+            syscoin_edge_da_ref_count(&over_limit),
+            Some(SYSCOIN_DA_MAX_REFS_PER_BATCH + 1)
+        );
+        assert_eq!(syscoin_edge_da_ref_hash(&over_limit), None);
+    }
+
+    #[test]
+    fn syscoin_edge_da_relay_analyzer_binds_exact_emitter_and_message_count() {
+        let relay = B160::from_be_bytes([0x11; 20]);
+        let spoof = B160::from_be_bytes([0x22; 20]);
+        let first_hashes = [[0x51; 32]];
+        let first = edge_da_message(
+            U256::from(57u64),
+            U256::from(1u64),
+            edge_da_commitment(&first_hashes),
+            &first_hashes,
+        );
+        let second_hashes = [[0x52; 32]];
+        let second = edge_da_message(
+            U256::from(57u64),
+            U256::from(2u64),
+            edge_da_commitment(&second_hashes),
+            &second_hashes,
+        );
+        let first_hash = syscoin_edge_da_ref_hash(&first).unwrap();
+
+        let mut logs = LogsStorage::<VecStackFactory, 8>::new_from_parts(Global);
+        // SYSCOIN: a canonical-looking message from a different emitter is not authority.
+        logs.push_message(
+            2,
+            &spoof,
+            UsizeAlignedByteBox::from_slice_in(&first, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(2, &relay),
+            SyscoinEdgeDaRelayMessage::Missing
+        );
+
+        // SYSCOIN: unrelated messages remain ignored once the one canonical relay message exists.
+        logs.push_message(
+            2,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&first, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(2, &relay),
+            SyscoinEdgeDaRelayMessage::Valid {
+                ref_count: 1,
+                ref_hash: first_hash,
+            }
+        );
+
+        // SYSCOIN: a second raw message from the relay is a duplicate even if both parse.
+        logs.push_message(
+            2,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&second, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(2, &relay),
+            SyscoinEdgeDaRelayMessage::Duplicate
+        );
+
+        // SYSCOIN: malformed data cannot be hidden behind one otherwise valid relay message.
+        logs.push_message(
+            3,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&first, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        logs.push_message(
+            3,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&[0xff; 32], Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(3, &relay),
+            SyscoinEdgeDaRelayMessage::Duplicate
+        );
+    }
+
+    #[test]
+    fn syscoin_edge_da_relay_analyzer_rejects_malformed_and_oversized_messages() {
+        let relay = B160::from_be_bytes([0x33; 20]);
+        let mut logs = LogsStorage::<VecStackFactory, 8>::new_from_parts(Global);
+
+        logs.push_message(
+            4,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&[0xff; 32], Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(4, &relay),
+            SyscoinEdgeDaRelayMessage::Malformed
+        );
+
+        // SYSCOIN: a structurally canonical envelope carrying zero openings is still invalid.
+        let empty_hashes: [[u8; 32]; 0] = [];
+        let empty = edge_da_message(
+            U256::from(57u64),
+            U256::from(7u64),
+            edge_da_commitment(&empty_hashes),
+            &empty_hashes,
+        );
+        logs.push_message(
+            7,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&empty, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(7, &relay),
+            SyscoinEdgeDaRelayMessage::Malformed
+        );
+
+        let oversized_hashes = [[0x44; 32]; SYSCOIN_DA_MAX_REFS_PER_BATCH as usize + 1];
+        let oversized = edge_da_message(
+            U256::from(57u64),
+            U256::from(5u64),
+            edge_da_commitment(&oversized_hashes),
+            &oversized_hashes,
+        );
+        logs.push_message(
+            5,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&oversized, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(5, &relay),
+            SyscoinEdgeDaRelayMessage::Malformed
+        );
+
+        let exact_limit_hashes = [[0x45; 32]; SYSCOIN_DA_MAX_REFS_PER_BATCH as usize];
+        let exact_limit = edge_da_message(
+            U256::from(57u64),
+            U256::from(6u64),
+            edge_da_commitment(&exact_limit_hashes),
+            &exact_limit_hashes,
+        );
+        let exact_limit_hash = syscoin_edge_da_ref_hash(&exact_limit).unwrap();
+        logs.push_message(
+            6,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&exact_limit, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(6, &relay),
+            SyscoinEdgeDaRelayMessage::Valid {
+                ref_count: SYSCOIN_DA_MAX_REFS_PER_BATCH,
+                ref_hash: exact_limit_hash,
+            }
+        );
+    }
+
+    #[test]
+    fn syscoin_edge_da_relay_analysis_observes_log_rollback() {
+        let relay = B160::from_be_bytes([0x55; 20]);
+        let blob_hashes = [[0x66; 32]];
+        let message = edge_da_message(
+            U256::from(57u64),
+            U256::from(6u64),
+            edge_da_commitment(&blob_hashes),
+            &blob_hashes,
+        );
+        let mut logs = LogsStorage::<VecStackFactory, 8>::new_from_parts(Global);
+        let rollback_handle = logs.start_frame();
+        logs.push_message(
+            6,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&message, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert!(matches!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(6, &relay),
+            SyscoinEdgeDaRelayMessage::Valid { .. }
+        ));
+        logs.finish_frame(Some(rollback_handle));
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(6, &relay),
+            SyscoinEdgeDaRelayMessage::Missing
+        );
+    }
+
+    fn check_syscoin_edge_da_reverse_analysis<SF: StackFactory<2>>() {
+        let relay = B160::from_be_bytes([0x55; 20]);
+        let unrelated = B160::from_be_bytes([0x77; 20]);
+        let blob_hashes = [[0x66; 32]];
+        let message = edge_da_message(
+            U256::from(57u64),
+            U256::from(1u64),
+            edge_da_commitment(&blob_hashes),
+            &blob_hashes,
+        );
+        let mut logs = LogsStorage::<SF, 2>::new_from_parts(Global);
+        assert!(logs.list.iter_rev().next().is_none());
+        for (tx_number, emitter) in [(1, relay), (2, unrelated), (2, unrelated), (3, relay)] {
+            logs.push_message(
+                tx_number,
+                &emitter,
+                UsizeAlignedByteBox::from_slice_in(&message, Global),
+                Bytes32::ZERO,
+            )
+            .unwrap();
+        }
+        let mut reversed = logs.list.iter_rev().map(|log| log.tx_number);
+        assert_eq!(reversed.next(), Some(3));
+        let cloned = reversed.clone();
+        assert_eq!(reversed.collect::<alloc::vec::Vec<_>>(), [2, 2, 1]);
+        assert_eq!(cloned.collect::<alloc::vec::Vec<_>>(), [2, 2, 1]);
+
+        for tx_number in [1, 3] {
+            assert!(matches!(
+                logs.syscoin_edge_da_relay_message_for_tx_number(tx_number, &relay),
+                SyscoinEdgeDaRelayMessage::Valid { ref_count: 1, .. }
+            ));
+        }
+        for tx_number in [0, 2, 4] {
+            assert_eq!(
+                logs.syscoin_edge_da_relay_message_for_tx_number(tx_number, &relay),
+                SyscoinEdgeDaRelayMessage::Missing
+            );
+        }
+
+        let rollback_handle = logs.start_frame();
+        logs.push_message(
+            3,
+            &relay,
+            UsizeAlignedByteBox::from_slice_in(&message, Global),
+            Bytes32::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(3, &relay),
+            SyscoinEdgeDaRelayMessage::Duplicate
+        );
+        logs.finish_frame(Some(rollback_handle));
+        assert_eq!(
+            logs.list
+                .iter_rev()
+                .map(|log| log.tx_number)
+                .collect::<alloc::vec::Vec<_>>(),
+            [3, 2, 2, 1]
+        );
+        assert!(matches!(
+            logs.syscoin_edge_da_relay_message_for_tx_number(3, &relay),
+            SyscoinEdgeDaRelayMessage::Valid { ref_count: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn syscoin_edge_da_reverse_analysis_vec_observes_tx_boundaries_and_rollback() {
+        check_syscoin_edge_da_reverse_analysis::<VecStackFactory>();
+    }
+
+    #[test]
+    fn syscoin_edge_da_reverse_analysis_list_vec_observes_tx_boundaries_and_rollback() {
+        check_syscoin_edge_da_reverse_analysis::<ListVecStackFactory>();
+    }
+
+    #[test]
+    fn syscoin_edge_da_root_folds_prevalidated_hashes_in_order() {
+        let first = Bytes32::from_array([0x71; 32]);
+        let second = Bytes32::from_array([0x72; 32]);
+
+        let expected = extend_root(extend_root(Bytes32::ZERO, first), second);
+        assert_eq!(
+            syscoin_edge_da_refs_root_from_hashes(&[first, second]),
+            expected
+        );
+        assert_eq!(
+            syscoin_edge_da_refs_root_from_hashes(&[second]),
+            extend_root(Bytes32::ZERO, second)
+        );
+
+        let reversed_root = extend_root(extend_root(Bytes32::ZERO, second), first);
+        assert_eq!(
+            syscoin_edge_da_refs_root_from_hashes(&[second, first]),
+            reversed_root
+        );
+        assert_ne!(reversed_root, expected);
     }
 }

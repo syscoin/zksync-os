@@ -45,11 +45,13 @@ add_pair() {
   fi
 }
 
+# SYSCOIN: Render the compact Bitcoin-DA pass with its in-guest `blob_data_id`
+# marker while retaining the existing benchmark artifact filenames.
 # Build three separate pair lists so the resulting PR comment has a clear
 # top-level structure:
 #   - Headline:   `process_block` per (block, DA scheme).
 #   - Sub-phases: `system_init`, `run_tx_loop`, `da_commitment`,
-#                 `state_commitment_update`, `blob_versioned_hash` — collapsed
+#                 `state_commitment_update`, `blob_data_id` — collapsed
 #                 because they're noisy unless something regresses inside one.
 #   - Precompiles bench: the synthetic test-crate workload — ~30 labels.
 headline_pairs=""
@@ -63,7 +65,7 @@ subphase_pairs=""
 # only differs in the post-tx-op stage, so we surface only the rows that
 # actually change there.
 subphase_symbols_keccak="system_init run_tx_loop da_commitment state_commitment_update"
-subphase_symbols_blobs="da_commitment state_commitment_update blob_versioned_hash"
+subphase_symbols_compact_da="da_commitment state_commitment_update blob_data_id"
 
 for dir in tests/instances/eth_runner/blocks/*; do
   blk=$(basename "$dir")
@@ -101,10 +103,11 @@ for dir in tests/instances/eth_runner/blocks/*; do
     else
       base_blob="head_block_${blk}_blobs.bench"
     fi
-    add_pair headline_pairs "(\"block_${blk} (blobs DA)\", \"${base_blob}\", \"head_block_${blk}_blobs.bench\", \"process_block\")"
-    add_pair headline_agg_pairs "(\"all blocks (blobs DA)\", \"${base_blob}\", \"head_block_${blk}_blobs.bench\", \"process_block\")"
-    for sym in $subphase_symbols_blobs; do
-      add_pair subphase_pairs "(\"block_${blk} (blobs DA)\", \"${base_blob}\", \"head_block_${blk}_blobs.bench\", \"${sym}\")"
+    # SYSCOIN: Relabel the legacy `_blobs.bench` artifact as the compact DA mode it now measures.
+    add_pair headline_pairs "(\"block_${blk} (compact Bitcoin DA)\", \"${base_blob}\", \"head_block_${blk}_blobs.bench\", \"process_block\")"
+    add_pair headline_agg_pairs "(\"all blocks (compact Bitcoin DA)\", \"${base_blob}\", \"head_block_${blk}_blobs.bench\", \"process_block\")"
+    for sym in $subphase_symbols_compact_da; do
+      add_pair subphase_pairs "(\"block_${blk} (compact Bitcoin DA)\", \"${base_blob}\", \"head_block_${blk}_blobs.bench\", \"${sym}\")"
     done
   fi
 done

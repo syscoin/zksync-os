@@ -48,6 +48,11 @@ impl<V, M: Clone, SF: StackFactory<N>, const N: usize, A: Allocator + Clone>
         self.list.iter().map(|(v, _)| v)
     }
 
+    // SYSCOIN: Relay checks need only the current transaction's retained log suffix.
+    pub fn iter_rev(&self) -> impl Iterator<Item = &V> + Clone {
+        self.list.iter_rev().map(|(v, _)| v)
+    }
+
     pub fn iter_skip_n(&self, n: usize) -> impl ExactSizeIterator<Item = &V> + Clone {
         self.list.iter_skip_n(n).map(|(v, _)| v)
     }

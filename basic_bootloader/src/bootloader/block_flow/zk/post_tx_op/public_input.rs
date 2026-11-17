@@ -75,6 +75,8 @@ pub struct BatchOutput {
     pub interop_roots_rolling_hash: Bytes32,
     /// Settlement layer chain id.
     pub settlement_layer_chain_id: U256,
+    /// SYSCOIN: root of compact edge DA refs emitted by chains settling to Gateway.
+    pub edge_da_refs_root: Bytes32,
 }
 
 impl BatchOutput {
@@ -96,6 +98,8 @@ impl BatchOutput {
         hasher.update(self.upgrade_tx_hash.as_u8_ref());
         hasher.update(self.interop_roots_rolling_hash.as_u8_ref());
         hasher.update(self.settlement_layer_chain_id.to_be_bytes::<32>());
+        // SYSCOIN: bind compact edge DA refs into the proven Gateway batch output.
+        hasher.update(self.edge_da_refs_root.as_u8_ref());
         hasher.finalize()
     }
 }
@@ -130,6 +134,7 @@ impl BatchPublicInput {
 }
 
 #[cfg(test)]
+// SYSCOIN: Downstream public-input vectors cover the appended compact Edge-DA root.
 mod tests {
     use super::*;
     use alloy_primitives::hex;
@@ -152,6 +157,7 @@ mod tests {
             upgrade_tx_hash: Bytes32::ZERO,
             interop_roots_rolling_hash: Bytes32::ZERO,
             settlement_layer_chain_id: U256::from(9u64),
+            edge_da_refs_root: Bytes32::ZERO, // SYSCOIN: canonical empty forwarded-ref root
         }
     }
 
@@ -181,8 +187,18 @@ mod tests {
 
         assert_eq!(
             default_hash,
-            hex!("1c24f398aa0701f9348912ecca748ba93bfb84bfe4f283c16514311419f4f658")
+            hex!("3fa2b6bcbfde24e4aa05b9d48bb04bd3f183713bdd31889f976c74ff7694c1ab")
         );
+    }
+
+    #[test]
+    // SYSCOIN: Changing only the forwarded-ref root must change the proven batch output hash.
+    fn batch_output_hash_commits_to_edge_da_refs_root() {
+        let default_hash = sample_batch_output().hash();
+        let mut changed = sample_batch_output();
+        changed.edge_da_refs_root = Bytes32::from_array([1u8; 32]);
+
+        assert_ne!(default_hash, changed.hash());
     }
 
     #[test]

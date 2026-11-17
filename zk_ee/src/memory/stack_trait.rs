@@ -65,6 +65,11 @@ pub trait Stack<T: Sized, A: Allocator> {
     where
         T: 'a;
 
+    /// SYSCOIN: Reverse traversal lets transaction-local consumers stop before prior history.
+    fn iter_rev<'a>(&'a self) -> impl Iterator<Item = &'a T> + Clone
+    where
+        T: 'a;
+
     /// Returns an iterator that skips the first n elements.
     ///
     /// Useful for iterating over a subset of the stack without creating

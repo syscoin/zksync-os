@@ -43,12 +43,48 @@ impl<R: Resources> StorageAccessPolicy<R, Bytes32> for EthereumLikeStorageAccess
         resources.charge(&R::from_ergs_and_native(ergs, native))
     }
 
+    // SYSCOIN: EE coldness and native cold admission are tracked separately
+    // for bootloader fee-ledger storage accesses.
+    fn charge_cold_storage_read_ergs_extra(
+        &self,
+        ee_type: ExecutionEnvironmentType,
+        resources: &mut R,
+    ) -> Result<(), SystemError> {
+        let ergs = match ee_type {
+            ExecutionEnvironmentType::NoEE => Ergs::empty(),
+            ExecutionEnvironmentType::EVM => {
+                Ergs((COLD_SLOAD_COST - WARM_STORAGE_READ_COST) * ERGS_PER_GAS)
+            }
+        };
+        resources.charge(&R::from_ergs(ergs))
+    }
+
+    // SYSCOIN: Native cold-read work is charged independently of EVM warmth.
+    fn charge_cold_storage_read_native_extra(
+        &self,
+        resources: &mut R,
+        is_new_slot: bool,
+    ) -> Result<(), SystemError> {
+        let native = if is_new_slot {
+            R::Native::from_computational(
+                crate::system_implementation::flat_storage_model::cost_constants::COLD_NEW_STORAGE_READ_NATIVE_COST,
+            )
+        } else {
+            R::Native::from_computational(
+                crate::system_implementation::flat_storage_model::cost_constants::COLD_EXISTING_STORAGE_READ_NATIVE_COST,
+            )
+        };
+        resources.charge(&R::from_native(native))
+    }
+
     fn charge_cold_storage_read_extra(
         &self,
         ee_type: ExecutionEnvironmentType,
         resources: &mut R,
         is_new_slot: bool,
     ) -> Result<(), SystemError> {
+        // SYSCOIN: Preserve the pre-existing combined account-cache charging
+        // semantics exactly; only slot materialization uses the split methods.
         let ergs = match ee_type {
             ExecutionEnvironmentType::NoEE => Ergs::empty(),
             ExecutionEnvironmentType::EVM => {
@@ -61,7 +97,8 @@ impl<R: Resources> StorageAccessPolicy<R, Bytes32> for EthereumLikeStorageAccess
             )
         } else {
             R::Native::from_computational(
-            crate::system_implementation::flat_storage_model::cost_constants::COLD_EXISTING_STORAGE_READ_NATIVE_COST,)
+                crate::system_implementation::flat_storage_model::cost_constants::COLD_EXISTING_STORAGE_READ_NATIVE_COST,
+            )
         };
         resources.charge(&R::from_ergs_and_native(ergs, native))
     }

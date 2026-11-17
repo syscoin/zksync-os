@@ -6,12 +6,17 @@ use zk_ee::utils::Bytes32;
 mod blake2s_commitment_generator;
 pub mod blob_commitment_generator;
 mod keccak256_commitment_generator;
+// SYSCOIN: Keep the compact Bitcoin-DA implementation separate from upstream's
+// byte-for-byte KZG module so future upstream syncs retain an obvious boundary.
+mod syscoin_commitment_generator;
 
 pub use blake2s_commitment_generator::Blake2sCommitmentGenerator;
 pub use blob_commitment_generator::commitment_and_proof_advice::KZGCommitmentAndProof;
 pub use blob_commitment_generator::commitment_and_proof_advice::BLOB_COMMITMENT_AND_PROOF_QUERY_ID;
 pub use blob_commitment_generator::BlobCommitmentGenerator;
 pub use keccak256_commitment_generator::Keccak256CommitmentGenerator;
+// SYSCOIN: Downstream generator selected for Syscoin's `BlobsZKsyncOS` mode.
+pub use syscoin_commitment_generator::SyscoinDACommitmentGenerator;
 use zk_ee::common_structs::da_commitment_scheme::DACommitmentScheme;
 use zk_ee::internal_error;
 use zk_ee::oracle::IOOracle;
@@ -39,7 +44,7 @@ impl<O: IOOracle> DACommitmentGenerator<O> for NopCommitmentGenerator {
     }
 }
 
-pub fn da_commitment_generator_from_scheme<A: Allocator, O: IOOracle>(
+pub fn da_commitment_generator_from_scheme<A: Allocator + Clone + 'static, O: IOOracle>(
     da_commitment_scheme: DACommitmentScheme,
     alloc: A,
 ) -> Result<Box<dyn DACommitmentGenerator<O>, A>, InternalError> {
@@ -52,7 +57,9 @@ pub fn da_commitment_generator_from_scheme<A: Allocator, O: IOOracle>(
             Ok(alloc::boxed::Box::new_in(NopCommitmentGenerator, alloc))
         }
         DACommitmentScheme::BlobsZKsyncOS => Ok(alloc::boxed::Box::new_in(
-            BlobCommitmentGenerator::new(),
+            // SYSCOIN: Syscoin commits bounded Blake2s data IDs in-guest. The
+            // upstream KZG generator above remains available but is not selected.
+            SyscoinDACommitmentGenerator::new_in(alloc.clone()),
             alloc,
         )),
         _ => Err(internal_error!("Unsupported DA commitment scheme")),

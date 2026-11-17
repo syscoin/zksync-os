@@ -80,6 +80,23 @@ pub use tx_result_callback::TxResultCallback;
 pub use tx_source::NextTxResponse;
 pub use tx_source::TxSource;
 
+/// SYSCOIN: Host-only access to the exact gas-tank admission accounting used
+/// by the guest. The server REVM checker must reproduce the guest's dynamic
+/// fee-payer branch without copying consensus constants or formulas.
+#[doc(hidden)]
+pub mod syscoin_gas_tank_checker {
+    pub use basic_bootloader::bootloader::constants::{
+        CALLDATA_NON_ZERO_BYTE_TOKEN_FACTOR, CALLDATA_ZERO_BYTE_TOKEN_FACTOR,
+        SYSCOIN_GAS_TANK_CONDITIONAL_COMPUTATIONAL_NATIVE_COST, SYSCOIN_GAS_TANK_INTRINSIC_PUBDATA,
+        SYSCOIN_GAS_TANK_PROBE_COMPUTATIONAL_NATIVE_COST,
+    };
+    pub use basic_bootloader::bootloader::transaction_flow::gas_helpers::{
+        calculate_l2_tx_intrinsic_computational_native_resources,
+        calculate_l2_tx_intrinsic_pubdata, calculate_tx_intrinsic_gas, create_resources_for_tx,
+        L2TxIntrinsicNativeInput, ResourcesForTx,
+    };
+}
+
 use self::output::BlockOutput;
 use crate::run::output::TxResult;
 use crate::run::test_impl::NoopTxCallback;
@@ -246,6 +263,8 @@ pub fn generate_proof_input<
     oracle.add_external_processor(tree_responder);
     add_fri_proof_responder(&mut oracle, fri_proof_sidecar, fri_verifier_artifacts);
     oracle.add_external_processor(callable_oracles::arithmetic::NativeArithmeticQuery);
+    // SYSCOIN: Preserve the upstream KZG processor surface. The selected
+    // compact generator never queries it, so it emits no witness advice.
     oracle.add_external_processor(
         callable_oracles::blob_kzg_commitment::NativeBlobCommitmentAndProofQuery,
     );
@@ -275,8 +294,9 @@ pub fn generate_proof_input<
 /// This matches the existing RISC-V-based multiblock flow, where each block is
 /// executed independently first and then combined into a batch witness.
 ///
-/// Important: `da_commitment_scheme` must match the scheme used for the
-/// per-block proof input generation.
+/// The DA-scheme and pubdata parameters remain for caller compatibility. SYSCOIN: compact
+/// Blake2s IDs are computed in-guest, so this helper no longer splices a scheme-specific advice
+/// tail into the combined witness.
 ///
 /// Single-block prover-input recording includes one chain-config oracle response
 /// at the beginning of every block input. The multiblock proving guest reads
@@ -286,8 +306,8 @@ pub fn generate_proof_input<
 ///
 pub fn generate_legacy_batch_proof_input(
     blocks_proof_inputs: Vec<&[u32]>,
-    da_commitment_scheme: DACommitmentScheme,
-    blocks_pubdata: Vec<&[u8]>,
+    _da_commitment_scheme: DACommitmentScheme,
+    _blocks_pubdata: Vec<&[u8]>,
 ) -> Vec<u32> {
     fn disconnect_marker_idx(block_proof_input: &[u32]) -> usize {
         assert!(
@@ -303,73 +323,27 @@ pub fn generate_legacy_batch_proof_input(
         disconnect_marker_idx
     }
 
-    let mut trimmed_blocks_proof_inputs = Vec::with_capacity(blocks_proof_inputs.len());
-    let blobs_advice = match da_commitment_scheme {
-        DACommitmentScheme::BlobsZKsyncOS => {
-            let total_pubdata_length: usize = blocks_pubdata
-                .iter()
-                .map(|blocks_pubdata| blocks_pubdata.len())
-                .sum();
-            let mut blobs_data = Vec::with_capacity(total_pubdata_length + 31);
-            blobs_data.extend_from_slice(&(total_pubdata_length as u64).to_be_bytes());
-            blobs_data.extend_from_slice(&[0u8; 23]); // pad to 31
-            for (block_proof_input, block_pubdata) in
-                blocks_proof_inputs.iter().zip(blocks_pubdata.into_iter())
-            {
-                blobs_data.extend_from_slice(block_pubdata);
-                let advice_words = (block_pubdata.len() + 31).div_ceil(31 * 4096) * 25;
-                assert!(
-                    block_proof_input.len() > advice_words,
-                    "block proof input is too short to contain blob advice and disconnect marker"
-                );
-                let disconnect_marker_idx = disconnect_marker_idx(block_proof_input);
-                let advice_start_idx = disconnect_marker_idx - advice_words;
-                trimmed_blocks_proof_inputs.push(block_proof_input[..advice_start_idx].to_vec());
-            }
-            let mut blobs_advice = Vec::with_capacity(25 * blobs_data.len().div_ceil(31 * 4096));
-            for blob_data in blobs_data.chunks(31 * 4096) {
-                let advice =
-                    callable_oracles::blob_kzg_commitment::blob_kzg_commitment_and_proof(blob_data);
-                blobs_advice.push(24);
-                for word in advice.iter() {
-                    #[cfg(target_pointer_width = "32")]
-                    blobs_advice.push(word as u32);
-                    #[cfg(target_pointer_width = "64")]
-                    {
-                        let low = word as u32;
-                        let high = (word >> 32) as u32;
-                        blobs_advice.push(low);
-                        blobs_advice.push(high);
-                    }
-                }
-            }
-            blobs_advice
-        }
-        _ => {
-            trimmed_blocks_proof_inputs.extend(blocks_proof_inputs.into_iter().map(
-                |block_proof_input| {
-                    let disconnect_marker_idx = disconnect_marker_idx(block_proof_input);
-                    block_proof_input[..disconnect_marker_idx].to_vec()
-                },
-            ));
-            vec![]
-        }
-    };
+    // SYSCOIN: compact Blake2s blob IDs are computed in-guest, so per-block witnesses contain no
+    // DA oracle tail to remove or regenerate when the legacy multiblock stream is combined.
+    let mut trimmed_blocks_proof_inputs = blocks_proof_inputs
+        .into_iter()
+        .map(|block_proof_input| {
+            let disconnect_marker_idx = disconnect_marker_idx(block_proof_input);
+            block_proof_input[..disconnect_marker_idx].to_vec()
+        })
+        .collect::<Vec<_>>();
     keep_single_chain_config_response(&mut trimmed_blocks_proof_inputs);
     let mut proof_input = Vec::with_capacity(
         trimmed_blocks_proof_inputs
             .iter()
             .map(|block_proof_input| block_proof_input.len())
             .sum::<usize>()
-            + 1
-            + blobs_advice.len()
-            + 1,
+            + 2,
     );
     proof_input.push(trimmed_blocks_proof_inputs.len() as u32);
     for block_proof_input in trimmed_blocks_proof_inputs {
         proof_input.extend_from_slice(block_proof_input.as_slice());
     }
-    proof_input.extend_from_slice(blobs_advice.as_slice());
     proof_input.push(0);
     proof_input
 }
@@ -466,6 +440,7 @@ pub fn generate_batch_proof_input<BS: BatchState, TS: TxSource>(
         tree: batch_state.clone(),
     });
     oracle.add_external_processor(callable_oracles::arithmetic::NativeArithmeticQuery);
+    // SYSCOIN: Retained upstream processor; unused by compact DA.
     oracle.add_external_processor(
         callable_oracles::blob_kzg_commitment::NativeBlobCommitmentAndProofQuery,
     );
@@ -521,6 +496,7 @@ pub fn generate_batch_proof_input<BS: BatchState, TS: TxSource>(
     // At this point `batch_data` contains the canonical batch PI/output, while
     // `result_keeper.pubdata` contains the concatenated pubdata for the whole
     // batch.
+    // SYSCOIN: Compact DA ignores the retained upstream oracle argument.
     let (batch_public_input, batch_output) =
         batch_data.into_public_input_and_output(NullLogger, &mut oracle);
     // Multiblock proving cannot emit the final disconnect from the per-block
@@ -683,12 +659,14 @@ pub fn make_oracle_for_proofs_and_dumps_for_init_data_with_chain_config<
     oracle.add_external_processor(da_commitment_scheme_responder);
     if use_native_callable_oracles {
         oracle.add_external_processor(callable_oracles::arithmetic::NativeArithmeticQuery);
+        // SYSCOIN: Preserve upstream registration; compact DA does not query it.
         oracle.add_external_processor(
             callable_oracles::blob_kzg_commitment::NativeBlobCommitmentAndProofQuery,
         );
         oracle.add_external_processor(callable_oracles::field_hints::NativeFieldOpsQuery);
     } else {
         oracle.add_external_processor(callable_oracles::arithmetic::ArithmeticQuery);
+        // SYSCOIN: Preserve upstream registration; compact DA does not query it.
         oracle.add_external_processor(
             callable_oracles::blob_kzg_commitment::BlobCommitmentAndProofQuery,
         );
@@ -825,6 +803,7 @@ pub fn run_block_with_oracle_dump_ext_with_chain_config<
     oracle.add_external_processor(zk_proof_data_responder);
     oracle.add_external_processor(da_commitment_scheme_responder);
     oracle.add_external_processor(callable_oracles::arithmetic::ArithmeticQuery);
+    // SYSCOIN: Preserve upstream registration; compact DA does not query it.
     oracle
         .add_external_processor(callable_oracles::blob_kzg_commitment::BlobCommitmentAndProofQuery);
     oracle.add_external_processor(callable_oracles::field_hints::FieldOpsQuery);
@@ -877,6 +856,7 @@ pub fn run_block_from_oracle_dump<
     oracle.add_external_processor(zk_proof_data_responder);
     oracle.add_external_processor(da_commitment_scheme_responder);
     oracle.add_external_processor(callable_oracles::arithmetic::ArithmeticQuery);
+    // SYSCOIN: Preserve upstream registration; compact DA consumes no KZG advice.
     oracle
         .add_external_processor(callable_oracles::blob_kzg_commitment::BlobCommitmentAndProofQuery);
     oracle.add_external_processor(callable_oracles::field_hints::FieldOpsQuery);
@@ -951,6 +931,7 @@ pub fn simulate_tx<S: ReadStorage, PS: PreimageSource>(
 }
 
 #[cfg(test)]
+// SYSCOIN: Witness-combination tests cover the removal of per-block KZG advice tails.
 mod tests {
     use super::*;
     use zk_ee::common_structs::DACommitmentScheme;
@@ -963,11 +944,12 @@ mod tests {
     }
 
     #[test]
+    // SYSCOIN: Legacy witness combination must preserve only the single final disconnect now that
+    // compact-DA advice tails no longer exist.
     fn replaces_per_block_disconnect_with_single_final_disconnect() {
         let chain_config = chain_config_response();
         let mut block_proof_input = chain_config.clone();
-        block_proof_input.extend_from_slice(&[11, 12, 24]);
-        block_proof_input.extend(100..124);
+        block_proof_input.extend_from_slice(&[11, 12]);
         block_proof_input.push(0);
 
         let batch_input = generate_legacy_batch_proof_input(
@@ -979,60 +961,9 @@ mod tests {
         let mut expected = vec![1];
         expected.extend_from_slice(&chain_config);
         expected.extend_from_slice(&[11, 12]);
-        expected.extend_from_slice(&blob_advice(&[1, 2, 3]));
         expected.push(0);
 
         assert_eq!(batch_input, expected);
-    }
-
-    fn blob_advice(pubdata: &[u8]) -> Vec<u32> {
-        let mut blobs_data = Vec::with_capacity(pubdata.len() + 31);
-        blobs_data.extend_from_slice(&(pubdata.len() as u64).to_be_bytes());
-        blobs_data.extend_from_slice(&[0u8; 23]);
-        blobs_data.extend_from_slice(pubdata);
-
-        let mut blobs_advice = Vec::with_capacity(25 * blobs_data.len().div_ceil(31 * 4096));
-        for blob_data in blobs_data.chunks(31 * 4096) {
-            let advice =
-                callable_oracles::blob_kzg_commitment::blob_kzg_commitment_and_proof(blob_data);
-            blobs_advice.push(24);
-            for word in advice.iter() {
-                #[cfg(target_pointer_width = "32")]
-                blobs_advice.push(word as u32);
-                #[cfg(target_pointer_width = "64")]
-                {
-                    let low = word as u32;
-                    let high = (word >> 32) as u32;
-                    blobs_advice.push(low);
-                    blobs_advice.push(high);
-                }
-            }
-        }
-        blobs_advice
-    }
-
-    #[test]
-    fn legacy_batch_input_handles_empty_blob_pubdata() {
-        let chain_config = chain_config_response();
-        let block_witness_payload = [11, 22, 33];
-        let mut single_block_witness = chain_config.clone();
-        single_block_witness.extend_from_slice(&block_witness_payload);
-        single_block_witness.extend_from_slice(&[100; 25]);
-        single_block_witness.push(0);
-
-        let batch_witness = generate_legacy_batch_proof_input(
-            vec![single_block_witness.as_slice()],
-            DACommitmentScheme::BlobsZKsyncOS,
-            vec![&[]],
-        );
-
-        let mut expected = vec![1];
-        expected.extend_from_slice(&chain_config);
-        expected.extend_from_slice(&block_witness_payload);
-        expected.extend_from_slice(&blob_advice(&[]));
-        expected.push(0);
-
-        assert_eq!(batch_witness, expected);
     }
 
     #[test]

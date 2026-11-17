@@ -53,8 +53,8 @@ fri_precompile = [
 # Selects the BPO2 blob-count schedule; default is base-Osaka.
 fusaka-bpo-2 = ["basic_bootloader/fusaka-bpo-2"]
 
-# Features used for production, by both the singleblock_batch and multiblock_batch binaries.
-production = ["fusaka-bpo-2"]
+# SYSCOIN: Production execution exposes the fixed-parameter SLH-DSA precompile at 0x101.
+production = ["fusaka-bpo-2", "system_hooks/slh_dsa_precompile"]
 
 # Features used for tests.
 for_tests = ["production", "basic_bootloader/eip-4844"]

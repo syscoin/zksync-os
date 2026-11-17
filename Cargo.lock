@@ -2193,6 +2193,7 @@ dependencies = [
  "ruint",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "storage_models",
  "strum_macros",
  "u256",
@@ -5824,6 +5825,7 @@ dependencies = [
  "forward_system",
  "hex",
  "rig",
+ "sha2 0.10.9",
  "zksync_os_tests_common",
 ]
 

@@ -4,8 +4,71 @@ use super::*;
 use crate::bootloader::{
     block_flow::tx_loop::TxLoopOp, transaction_flow::zk::ZkTransactionFlowOnlyEOA,
 };
+// SYSCOIN: authorized Gateway commits bind exactly one message from the baked relay emitter.
+use crate::bootloader::transaction_flow::zk::syscoin_edge_da::{
+    syscoin_compact_edge_da_enabled_on_chain, syscoin_compact_edge_da_relay_emitter,
+};
+use zk_ee::common_structs::SyscoinEdgeDaRelayMessage;
 use zk_ee::memory::stack_trait::Stack;
 use zk_ee::system::{IOTeardown, Resource};
+use zk_ee::utils::Bytes32;
+
+// SYSCOIN: Keep the cross-block arithmetic in one testable, overflow-safe helper; the caller
+// compares the returned batch total with the consensus 32-opening limit before committing a tx.
+fn next_syscoin_edge_da_ref_counts(
+    prior_blocks: u32,
+    current_block: u32,
+    current_tx: u32,
+) -> Result<(u32, u32), zk_ee::system::errors::internal::InternalError> {
+    let next_block = current_block
+        .checked_add(current_tx)
+        .ok_or_else(|| internal_error!("Syscoin edge DA ref count overflow"))?;
+    let next_batch = prior_blocks
+        .checked_add(next_block)
+        .ok_or_else(|| internal_error!("Syscoin edge DA ref count overflow"))?;
+    Ok((next_block, next_batch))
+}
+
+// SYSCOIN: turn strict raw-message analysis into the one optional hash/count that may survive
+// transaction rollback. Unsupported call shapes must not silently discard authentic relay messages.
+fn validated_syscoin_edge_da_ref(
+    is_authorized_success: bool,
+    relay_message: Option<SyscoinEdgeDaRelayMessage>,
+) -> Result<Option<(u32, Bytes32)>, InvalidTransaction> {
+    if !is_authorized_success {
+        return match relay_message {
+            None | Some(SyscoinEdgeDaRelayMessage::Missing) => Ok(None),
+            Some(_) => Err(InvalidTransaction::InvalidStructure),
+        };
+    }
+    match relay_message {
+        Some(SyscoinEdgeDaRelayMessage::Valid {
+            ref_count,
+            ref_hash,
+        }) => Ok(Some((ref_count, ref_hash))),
+        Some(
+            SyscoinEdgeDaRelayMessage::Missing
+            | SyscoinEdgeDaRelayMessage::Malformed
+            | SyscoinEdgeDaRelayMessage::Duplicate,
+        )
+        | None => Err(InvalidTransaction::InvalidStructure),
+    }
+}
+
+// SYSCOIN: a transaction larger than the whole batch allowance can never succeed after sealing;
+// distinguish that invalid shape from aggregate overflow that is retryable in a fresh batch.
+fn syscoin_edge_da_ref_limit_error(
+    refs_in_tx: u32,
+    refs_in_batch: u32,
+) -> Option<InvalidTransaction> {
+    if refs_in_tx > zk_ee::common_structs::logs_storage::SYSCOIN_DA_MAX_REFS_PER_BATCH {
+        Some(InvalidTransaction::InvalidStructure)
+    } else if refs_in_batch > zk_ee::common_structs::logs_storage::SYSCOIN_DA_MAX_REFS_PER_BATCH {
+        Some(InvalidTransaction::SyscoinEdgeDaRefsLimitReached)
+    } else {
+        None
+    }
+}
 
 impl<
         S: EthereumLikeTypes<Metadata = zk_ee::system::metadata::zk_metadata::ZkMetadata>,
@@ -170,6 +233,42 @@ where
                                 &tx_processing_result.result,
                                 ExecutionResult::Success { .. }
                             );
+                            // SYSCOIN: Analyze the baked relay's raw message set while the current
+                            // transaction frame can still be rolled back.
+                            let is_authorized_syscoin_edge_da_commit =
+                                tx_status && tx_processing_result.collects_syscoin_edge_da_refs;
+                            let syscoin_edge_da_relay_message = if tx_status
+                                && syscoin_compact_edge_da_enabled_on_chain(system.get_chain_id())
+                            {
+                                let canonical_relay_emitter =
+                                    syscoin_compact_edge_da_relay_emitter();
+                                Some(system.io.syscoin_edge_da_relay_message_for_tx_number(
+                                    block_data.current_transaction_number,
+                                    &canonical_relay_emitter,
+                                ))
+                            } else {
+                                None
+                            };
+                            let (syscoin_edge_da_ref, syscoin_edge_da_structure_error) =
+                                match validated_syscoin_edge_da_ref(
+                                    is_authorized_syscoin_edge_da_commit,
+                                    syscoin_edge_da_relay_message,
+                                ) {
+                                    Ok(edge_ref) => (edge_ref, None),
+                                    Err(err) => (None, Some(err)),
+                                };
+                            let syscoin_edge_da_refs_in_tx = match syscoin_edge_da_ref {
+                                Some((ref_count, _)) => ref_count,
+                                None => 0,
+                            };
+                            let (
+                                next_syscoin_edge_da_refs_in_block,
+                                next_syscoin_edge_da_refs_in_batch,
+                            ) = next_syscoin_edge_da_ref_counts(
+                                batch_data.syscoin_edge_da_ref_count(),
+                                block_data.syscoin_compact_edge_da_ref_count,
+                                syscoin_edge_da_refs_in_tx,
+                            )?;
                             let receipt_hash = compute_receipt_hash(
                                 tx_processing_result.tx_type,
                                 &tx_status,
@@ -184,7 +283,20 @@ where
 
                             // Check if the transaction made the block reach any of the limits
                             // for gas, native, pubdata or logs.
-                            if let Err(err) = check_for_block_limits(
+                            if let Some(err) = syscoin_edge_da_structure_error {
+                                // SYSCOIN: Invalid or unsupported relay emissions must roll back
+                                // the child commit as well as its DA count/hash.
+                                system.finish_global_frame(Some(&pre_tx_rollback_handle))?;
+                                result_keeper.tx_processed(Err(err));
+                            } else if let Some(limit_error) = syscoin_edge_da_ref_limit_error(
+                                syscoin_edge_da_refs_in_tx,
+                                next_syscoin_edge_da_refs_in_batch,
+                            ) {
+                                // SYSCOIN: aggregate overflow seals/retries, while a single
+                                // intrinsically oversized commit is invalid even in an empty batch.
+                                system.finish_global_frame(Some(&pre_tx_rollback_handle))?;
+                                result_keeper.tx_processed(Err(limit_error));
+                            } else if let Err(err) = check_for_block_limits(
                                 system,
                                 next_block_gas_used,
                                 next_block_computational_native_used,
@@ -202,6 +314,10 @@ where
                                     next_block_computational_native_used;
                                 block_data.block_pubdata_used = next_block_pubdata_used;
                                 block_data.block_blob_gas_used = next_block_blob_gas_used;
+                                // SYSCOIN: Persist only the count from a commit transaction that
+                                // survived all rollback-capable structure and capacity checks.
+                                block_data.syscoin_compact_edge_da_ref_count =
+                                    next_syscoin_edge_da_refs_in_block;
 
                                 if starts_service_block {
                                     is_service_block = true;
@@ -248,6 +364,19 @@ where
                                         .upgrade_tx_recorder
                                         .add_upgrade_tx_hash(&tx_processing_result.tx_hash);
                                 }
+                                if is_authorized_syscoin_edge_da_commit {
+                                    // SYSCOIN: retain the already validated hash, never a tx number
+                                    // that would require permissive post-op log reparsing.
+                                    let (_, ref_hash) = syscoin_edge_da_ref.expect(
+                                        "authorized accepted Edge-DA commit must have a validated ref",
+                                    );
+                                    block_data
+                                        .syscoin_compact_edge_da_ref_hashes
+                                        .try_push(ref_hash)
+                                        .map_err(|_| {
+                                            internal_error!("too many Syscoin edge DA ref hashes")
+                                        })?;
+                                }
                                 block_data.current_transaction_number = block_data
                                     .current_transaction_number
                                     .checked_add(1)
@@ -281,5 +410,96 @@ where
         cycle_marker::end!("run_tx_loop");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+// SYSCOIN: Regression coverage for compact-ref admission and cross-block cap classification.
+mod syscoin_tests {
+    use super::{
+        next_syscoin_edge_da_ref_counts, syscoin_edge_da_ref_limit_error,
+        validated_syscoin_edge_da_ref,
+    };
+    use crate::bootloader::errors::InvalidTransaction;
+    use zk_ee::common_structs::logs_storage::{
+        SyscoinEdgeDaRelayMessage, SYSCOIN_DA_MAX_REFS_PER_BATCH,
+    };
+    use zk_ee::utils::Bytes32;
+
+    #[test]
+    fn gateway_refs_exact_limit_across_blocks_is_accepted() {
+        let (_, batch_total) = next_syscoin_edge_da_ref_counts(20, 0, 12).unwrap();
+        assert_eq!(batch_total, SYSCOIN_DA_MAX_REFS_PER_BATCH);
+    }
+
+    #[test]
+    fn gateway_refs_twenty_plus_thirteen_classifies_for_seal_and_retry() {
+        let (_, batch_total) = next_syscoin_edge_da_ref_counts(20, 0, 13).unwrap();
+        assert!(matches!(
+            syscoin_edge_da_ref_limit_error(13, batch_total),
+            Some(InvalidTransaction::SyscoinEdgeDaRefsLimitReached)
+        ));
+    }
+
+    #[test]
+    fn gateway_single_transaction_above_limit_is_unrecoverably_invalid() {
+        let (_, batch_total) = next_syscoin_edge_da_ref_counts(0, 0, 33).unwrap();
+        assert!(matches!(
+            syscoin_edge_da_ref_limit_error(33, batch_total),
+            Some(InvalidTransaction::InvalidStructure)
+        ));
+    }
+
+    #[test]
+    fn successful_authorized_gateway_commit_requires_exactly_one_valid_relay_message() {
+        for invalid_message in [
+            SyscoinEdgeDaRelayMessage::Missing,
+            SyscoinEdgeDaRelayMessage::Malformed,
+            SyscoinEdgeDaRelayMessage::Duplicate,
+        ] {
+            assert!(matches!(
+                validated_syscoin_edge_da_ref(true, Some(invalid_message)),
+                Err(InvalidTransaction::InvalidStructure)
+            ));
+        }
+
+        let ref_hash = Bytes32::from_array([0x81; 32]);
+        assert_eq!(
+            validated_syscoin_edge_da_ref(
+                true,
+                Some(SyscoinEdgeDaRelayMessage::Valid {
+                    ref_count: 2,
+                    ref_hash,
+                })
+            )
+            .unwrap(),
+            Some((2, ref_hash))
+        );
+    }
+
+    #[test]
+    fn unsupported_gateway_call_cannot_discard_canonical_relay_messages() {
+        for relay_message in [
+            SyscoinEdgeDaRelayMessage::Valid {
+                ref_count: 1,
+                ref_hash: Bytes32::from_array([0x81; 32]),
+            },
+            SyscoinEdgeDaRelayMessage::Malformed,
+            SyscoinEdgeDaRelayMessage::Duplicate,
+        ] {
+            assert!(matches!(
+                validated_syscoin_edge_da_ref(false, Some(relay_message)),
+                Err(InvalidTransaction::InvalidStructure)
+            ));
+        }
+    }
+
+    #[test]
+    fn unrelated_successful_transaction_does_not_require_a_relay_message() {
+        assert_eq!(validated_syscoin_edge_da_ref(false, None).unwrap(), None);
+        assert_eq!(
+            validated_syscoin_edge_da_ref(false, Some(SyscoinEdgeDaRelayMessage::Missing)).unwrap(),
+            None
+        );
     }
 }

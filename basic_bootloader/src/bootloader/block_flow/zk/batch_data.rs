@@ -36,6 +36,10 @@ pub struct ZKBatchDataKeeper<A: alloc::alloc::Allocator, O: IOOracle> {
     pub da_commitment_scheme: Option<DACommitmentScheme>,
     pub da_commitment_generator: Option<alloc::boxed::Box<dyn DACommitmentGenerator<O>, A>>,
     pub logs_storage: ArrayVec<Bytes32, 16384>,
+    // SYSCOIN: ordered root of compact edge DA refs emitted by Gateway child-chain commits.
+    pub edge_da_refs_root: Bytes32,
+    // SYSCOIN: forwarded Bitcoin-DA openings accepted by all previously applied blocks.
+    pub edge_da_refs_count: u32,
     enforced_txs_accumulator: TransactionsRollingKeccakHasher,
     // Includes all transactions
     pub tx_count: U256,
@@ -58,6 +62,9 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
             da_commitment_generator: None,
             da_commitment_scheme: None,
             logs_storage: ArrayVec::new(),
+            // SYSCOIN: A fresh multiblock batch starts with no forwarded compact refs.
+            edge_da_refs_root: Bytes32::ZERO,
+            edge_da_refs_count: 0,
             // keccak256([])
             enforced_txs_accumulator: TransactionsRollingKeccakHasher::empty(),
             tx_count: U256::ZERO,
@@ -90,6 +97,8 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
         interop_roots: impl Iterator<Item = &'a InteropRoot>,
         settlement_layer_chain_id: U256,
         number_of_txs_in_block: u32,
+        // SYSCOIN: Feed this block's accepted opening count into the persistent batch cap.
+        syscoin_edge_da_refs_in_block: u32,
     ) {
         if self.is_first_block {
             self.initial_state_commitment = Some(state_commitment_before);
@@ -125,6 +134,20 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
         self.multichain_root = multichain_root;
 
         self.tx_count += U256::from(number_of_txs_in_block);
+        // SYSCOIN: Persist the cap counter alongside the rolling root so multiblock proving
+        // cannot reset the 32-opening budget at a block boundary.
+        let next_edge_da_refs_count = self
+            .edge_da_refs_count
+            .checked_add(syscoin_edge_da_refs_in_block)
+            .expect("Syscoin edge DA ref count overflow");
+        // SYSCOIN: Fail closed in the proving keeper as a second invariant boundary even if a
+        // future transaction-loop change accidentally admits an oversized multiblock batch.
+        assert!(
+            next_edge_da_refs_count
+                <= zk_ee::common_structs::logs_storage::SYSCOIN_DA_MAX_REFS_PER_BATCH,
+            "Syscoin edge DA refs exceed the per-Gateway-batch limit"
+        );
+        self.edge_da_refs_count = next_edge_da_refs_count;
 
         self.interop_roots_rolling_hash = calculate_interop_roots_rolling_hash(
             self.interop_roots_rolling_hash,
@@ -183,6 +206,8 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
             first_block_timestamp: self.first_block_timestamp.unwrap(),
             last_block_timestamp: self.current_block_timestamp.unwrap(),
             da_commitment_scheme: self.da_commitment_scheme.unwrap(),
+            // SYSCOIN: The selected compact generator ignores this upstream oracle
+            // parameter; retaining it keeps the upstream KZG API intact.
             pubdata_commitment: self.da_commitment_generator.unwrap().finalize(oracle),
             number_of_layer_1_txs,
             number_of_layer_2_txs,
@@ -191,6 +216,7 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
             upgrade_tx_hash: self.upgrade_tx_hash.unwrap(),
             interop_roots_rolling_hash: self.interop_roots_rolling_hash,
             settlement_layer_chain_id: self.settlement_layer_chain_id.unwrap(),
+            edge_da_refs_root: self.edge_da_refs_root, // SYSCOIN: bind the validated relay root
         };
         let public_input = BatchPublicInput {
             state_before: self.initial_state_commitment.unwrap(),
@@ -224,6 +250,7 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> ZKBatchDataKeeper<A, O> {
     }
 }
 
+// SYSCOIN: The batch accumulator exposes prior-block compact-ref usage to the next tx loop.
 impl<A: alloc::alloc::Allocator, O: IOOracle> TxHashesAccumulator for ZKBatchDataKeeper<A, O> {
     // not used
     fn empty() -> Self {
@@ -234,9 +261,14 @@ impl<A: alloc::alloc::Allocator, O: IOOracle> TxHashesAccumulator for ZKBatchDat
     fn add_tx_hash(&mut self, tx_hash: &Bytes32) {
         self.enforced_txs_accumulator.add_tx_hash(tx_hash);
     }
+
+    fn syscoin_edge_da_ref_count(&self) -> u32 {
+        self.edge_da_refs_count
+    }
 }
 
 #[cfg(test)]
+// SYSCOIN: Regression coverage for the downstream multiblock compact-ref keeper invariants.
 mod tests {
     use super::*;
     use alloc::alloc::Global;
@@ -314,6 +346,7 @@ mod tests {
             core::iter::empty(),
             U256::from(1u64),
             0,
+            0,
         );
 
         // Second block continues the state chain but carries a different config.
@@ -328,6 +361,65 @@ mod tests {
             core::iter::empty(),
             U256::from(1u64),
             0,
+            0,
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Syscoin edge DA refs exceed the per-Gateway-batch limit")]
+    fn apply_block_rejects_twenty_plus_thirteen_forwarded_refs() {
+        let mut keeper = ZKBatchDataKeeper::<Global, DummyOracle>::new();
+        let state_a = Bytes32::from_byte_fill(1);
+        let state_b = Bytes32::from_byte_fill(2);
+        let config = ChainConfig::default();
+
+        keeper.apply_block(
+            state_a,
+            state_b,
+            dummy_proof_data(),
+            100,
+            config,
+            Bytes32::ZERO,
+            Bytes32::ZERO,
+            core::iter::empty(),
+            U256::from(1u64),
+            0,
+            20,
+        );
+        keeper.apply_block(
+            state_b,
+            Bytes32::from_byte_fill(3),
+            dummy_proof_data(),
+            101,
+            config,
+            Bytes32::ZERO,
+            Bytes32::ZERO,
+            core::iter::empty(),
+            U256::from(1u64),
+            0,
+            13,
+        );
+    }
+
+    #[test]
+    fn applied_block_exposes_forwarded_refs_through_accumulator_trait() {
+        let mut keeper = ZKBatchDataKeeper::<Global, DummyOracle>::new();
+        keeper.apply_block(
+            Bytes32::from_byte_fill(1),
+            Bytes32::from_byte_fill(2),
+            dummy_proof_data(),
+            100,
+            ChainConfig::default(),
+            Bytes32::ZERO,
+            Bytes32::ZERO,
+            core::iter::empty(),
+            U256::from(1u64),
+            0,
+            7,
+        );
+
+        // SYSCOIN: the tx loop reads this trait method across block boundaries;
+        // prove that the real multiblock keeper cannot silently return the zero fallback.
+        assert_eq!(TxHashesAccumulator::syscoin_edge_da_ref_count(&keeper), 7);
     }
 }

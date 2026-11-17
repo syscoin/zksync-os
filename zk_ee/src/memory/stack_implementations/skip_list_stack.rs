@@ -107,6 +107,14 @@ impl<T: Sized, const N: usize, A: Allocator + Clone> Stack<T, A> for ListVec<T, 
         ListVecIter::new_from_parts(outer, inner, self.len())
     }
 
+    // SYSCOIN: Walk from the tail without visiting older proving-memory chunks.
+    fn iter_rev<'a>(&'a self) -> impl Iterator<Item = &'a T> + Clone
+    where
+        T: 'a,
+    {
+        self.0.iter().rev().flat_map(|node| node.iter().rev())
+    }
+
     // TODO: implement customized iter_skip_n for better performance
     // TODO: optimized truncate?
 }

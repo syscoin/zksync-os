@@ -185,10 +185,10 @@ fn run_with_tracer<const RANDOMIZED: bool>(
     tracer: &mut impl Tracer<ForwardRunningSystem>,
 ) -> (BlockOutput, BlockExtraStats, Vec<u8>) {
     // Allow benchmarking to opt into a non-default DA commitment scheme. The
-    // bench currently runs two passes per block: the default `BlobsAndPubdataKeccak256`
+    // SYSCOIN: bench currently runs two passes per block: the default `BlobsAndPubdataKeccak256`
     // (which emits a placeholder zero-hash blob plus a keccak commitment over
     // pubdata) and `BlobsZKsyncOS` (which actually exercises the
-    // `BlobCommitmentGenerator` and the `blob_versioned_hash` cycle marker).
+    // `BlobCommitmentGenerator` and the `blob_data_id` cycle marker).
     // Falls back to the rig default when unset.
     //
     // NOTE: the literal string `BENCH_DA_SCHEME` is used as a `grep -q`

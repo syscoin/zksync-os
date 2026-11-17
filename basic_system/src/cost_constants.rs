@@ -12,6 +12,8 @@ pub const RIPEMD_160_PER_WORD_COST_ERGS: Ergs = Ergs(120 * ERGS_PER_GAS);
 pub const MODEXP_MINIMAL_COST_ERGS: Ergs = Ergs(500 * ERGS_PER_GAS);
 pub const P256_VERIFY_COST_ERGS: Ergs = Ergs(6900 * ERGS_PER_GAS);
 pub const ECRECOVER_COST_ERGS: Ergs = Ergs(3000 * ERGS_PER_GAS);
+// SYSCOIN: consensus-fixed SLH-DSA-SHA2-128-24 charge at precompile 0x101.
+pub const SLH_DSA_SHA2_128_24_VERIFY_COST_ERGS: Ergs = Ergs(45_000 * ERGS_PER_GAS);
 pub const BN254_ECADD_COST_ERGS: Ergs = Ergs(150 * ERGS_PER_GAS);
 pub const BN254_ECMUL_COST_ERGS: Ergs = Ergs(6000 * ERGS_PER_GAS);
 pub const BN254_PAIRING_STATIC_COST_ERGS: Ergs = Ergs(45000 * ERGS_PER_GAS);
@@ -62,6 +64,9 @@ pub const MODEXP_BASE_NATIVE_COST: u64 = 20_000;
 pub const MODEXP_PER_OP_DIGIT_SQ_NATIVE_COST: u64 = 340;
 pub const MODEXP_PER_OP_OVERHEAD_NATIVE_COST: u64 = 400;
 pub const P256_NATIVE_COST: u64 = native_with_delegations!(500_000, 71_000, 0);
+// SYSCOIN: conservative native charge for the portable verifier.
+pub const SLH_DSA_SHA2_128_24_VERIFY_NATIVE_COST: u64 =
+    native_with_delegations!(4_300_000, 650_000, 0);
 // TODO(EVM-1178) Add more vectors and benchmark cost better
 pub const POINT_EVALUATION_NATIVE_COST: u64 = native_with_delegations!(49_900_000, 3_301_000, 0);
 

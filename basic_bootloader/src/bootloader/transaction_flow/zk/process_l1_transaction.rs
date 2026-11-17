@@ -445,6 +445,7 @@ where
         native_used,
         pubdata_used: pubdata_used + intrinsic_pubdata,
         blob_gas_used: 0,
+        collects_syscoin_edge_da_refs: false, // SYSCOIN: authenticated Gateway commits opt in later
     })
 }
 
@@ -614,6 +615,12 @@ where
     let mut resources = S::Resources::FORMAL_INFINITE;
     let rollback_handle = system.start_global_frame()?;
     let l1_chain_id = read_l1_chain_id(system);
+    // SYSCOIN: Canonical fresh-chain storage contains the AssetTracker proxy
+    // but defers slots 154/155 initialization to the first Upgrade body.
+    if l1_chain_id.is_zero() {
+        system.finish_global_frame(Some(&rollback_handle))?;
+        return Ok(());
+    }
     let chain_id = U256::from(system.get_chain_id());
     let mut tracer = NopTracer::default();
     let mut validator = NopTxValidator;

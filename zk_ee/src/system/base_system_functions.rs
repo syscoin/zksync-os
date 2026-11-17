@@ -15,6 +15,7 @@ define_subsystem!(Secp256k1MulProjective);
 define_subsystem!(Secp256r1AddProjective);
 define_subsystem!(Secp256r1MulProjective);
 define_subsystem!(P256Verify);
+define_subsystem!(SlhDsaSha212824Verify); // SYSCOIN: typed boundary for precompile 0x101
 
 define_subsystem!(Bn254Add,
                   interface Bn254AddInterfaceError
@@ -191,6 +192,8 @@ pub trait SystemFunctions<R: Resources> {
     type Secp256r1AddProjective: SystemFunction<R, Secp256r1AddProjectiveErrors>;
     type Secp256r1MulProjective: SystemFunction<R, Secp256r1MulProjectiveErrors>;
     type P256Verify: SystemFunction<R, P256VerifyErrors>;
+    // SYSCOIN: typed system-function seam for the fixed SLH-DSA precompile.
+    type SlhDsaSha212824Verify: SystemFunction<R, SlhDsaSha212824VerifyErrors>;
     type Bn254Add: SystemFunction<R, Bn254AddErrors>;
     type Bn254Mul: SystemFunction<R, Bn254MulErrors>;
     type Bn254PairingCheck: SystemFunction<R, Bn254PairingCheckErrors>;
@@ -266,6 +269,16 @@ pub trait SystemFunctions<R: Resources> {
         allocator: A,
     ) -> Result<(), SubsystemError<P256VerifyErrors>> {
         Self::P256Verify::execute(input, output, resources, allocator)
+    }
+
+    // SYSCOIN: dispatch the fixed SLH-DSA-SHA2-128-24 verifier through the system-function trait.
+    fn slh_dsa_sha2_128_24_verify<D: TryExtend<u8> + ?Sized, A: core::alloc::Allocator + Clone>(
+        input: &[u8],
+        output: &mut D,
+        resources: &mut R,
+        allocator: A,
+    ) -> Result<(), SubsystemError<SlhDsaSha212824VerifyErrors>> {
+        Self::SlhDsaSha212824Verify::execute(input, output, resources, allocator)
     }
 
     fn bn254_add<D: TryExtend<u8> + ?Sized, A: core::alloc::Allocator + Clone>(

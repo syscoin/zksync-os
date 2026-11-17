@@ -54,6 +54,28 @@ pub trait StorageModel: Sized + SnapshottableIo {
         oracle: &mut impl IOOracle,
     ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageKey, SystemError>;
 
+    /// SYSCOIN: Bootloader-only fee-ledger read that preserves EVM access
+    /// metadata while charging native storage work.
+    fn fee_ledger_storage_read(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        oracle: &mut impl IOOracle,
+    ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, SystemError>;
+
+    /// SYSCOIN: Bootloader-only fail-closed fee-ledger mutation.
+    fn fee_ledger_storage_write(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        expected_current: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        new_value: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        rebase_evm_original: bool,
+        oracle: &mut impl IOOracle,
+    ) -> Result<(), SystemError>;
+
     /// Reads requested account properties for the given address.
     fn read_account_properties<
         EEVersion: Maybe<u8>,

@@ -23,6 +23,7 @@ strum_macros = { workspace = true }
 paste = { workspace = true }
 
 [features]
+slh_dsa_precompile = [] # SYSCOIN: fixed verifier enabled only by the production graph
 eip-7645 = []
 default = []
 testing = ["zk_ee/testing"]

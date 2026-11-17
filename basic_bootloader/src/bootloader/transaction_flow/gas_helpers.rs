@@ -1,4 +1,6 @@
 use super::super::*;
+// SYSCOIN: Gas-tank precharge dynamically reserves its probe and successful
+// native/pubdata branches through ResourcesForTx.
 use crate::bootloader::constants::{
     FRI_PROOF_INTRINSIC_NATIVE_COST_PER_PROOF, FRI_PROOF_TX_INTRINSIC_GAS,
     L1_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_CALLDATA_BYTE, L1_TX_INTRINSIC_NATIVE_COST,
@@ -40,6 +42,73 @@ impl<S: EthereumLikeTypes> core::fmt::Debug for ResourcesForTx<S> {
             .field("withheld", &self.withheld)
             .finish()
     }
+}
+
+impl<S: EthereumLikeTypes> ResourcesForTx<S> {
+    /// SYSCOIN: Atomically reserve a conditional intrinsic branch. Pubdata is
+    /// taken from withheld native first (matching pre-split charging), then any
+    /// remainder and the computational delta are charged from main resources.
+    /// Failure leaves both pools unchanged so the caller can use native fallback.
+    pub fn try_reserve_conditional_intrinsic(
+        &mut self,
+        native_per_pubdata_byte: u64,
+        computational_native: u64,
+        pubdata_bytes: u64,
+    ) -> bool {
+        // SYSCOIN: Keep the generic atomic primitive independently testable.
+        try_reserve_conditional_intrinsic_resources(
+            &mut self.main_resources,
+            &mut self.withheld,
+            native_per_pubdata_byte,
+            computational_native,
+            pubdata_bytes,
+        )
+    }
+}
+
+// SYSCOIN: Generic implementation of the withheld-first, all-or-nothing
+// reservation used by the dynamic gas-tank branches.
+fn try_reserve_conditional_intrinsic_resources<R: Resources>(
+    main_resources: &mut R,
+    withheld: &mut R,
+    native_per_pubdata_byte: u64,
+    computational_native: u64,
+    pubdata_bytes: u64,
+) -> bool {
+    let Some(pubdata_native) = native_per_pubdata_byte.checked_mul(pubdata_bytes) else {
+        return false;
+    };
+
+    let mut staged_main = main_resources.clone();
+    let mut staged_withheld = withheld.clone();
+    let from_withheld = pubdata_native.min(staged_withheld.native().as_u64());
+    if from_withheld != 0
+        && staged_withheld
+            .charge(&R::from_native(R::Native::from_computational(
+                from_withheld,
+            )))
+            .is_err()
+    {
+        return false;
+    }
+
+    let Some(from_main) = pubdata_native
+        .checked_sub(from_withheld)
+        .and_then(|remaining| remaining.checked_add(computational_native))
+    else {
+        return false;
+    };
+    if from_main != 0
+        && staged_main
+            .charge(&R::from_native(R::Native::from_computational(from_main)))
+            .is_err()
+    {
+        return false;
+    }
+
+    *main_resources = staged_main;
+    *withheld = staged_withheld;
+    true
 }
 
 /// Per-transaction quantities that drive the intrinsic computational-native
@@ -367,7 +436,8 @@ pub(crate) fn get_gas_price<S: EthereumLikeTypes, Config: BasicBootloaderExecuti
 mod tests {
     use super::{
         calculate_l1_tx_intrinsic_computational_native_resources,
-        calculate_l2_tx_intrinsic_computational_native_resources, L2TxIntrinsicNativeInput,
+        calculate_l2_tx_intrinsic_computational_native_resources,
+        try_reserve_conditional_intrinsic_resources, L2TxIntrinsicNativeInput,
     };
     use crate::bootloader::constants::{
         L1_TX_INTRINSIC_NATIVE_COST, L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST,
@@ -375,6 +445,8 @@ mod tests {
         L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_BLOB_VERSIONED_HASH,
         SERVICE_TX_INTRINSIC_COMPUTATIONAL_NATIVE_COST,
     };
+    use zk_ee::reference_implementations::{BaseResources, DecreasingNative};
+    use zk_ee::system::{Computational, Ergs, Resources};
 
     #[test]
     fn fixed_receipt_hash_is_charged_intrinsically_for_every_tx_class() {
@@ -424,5 +496,62 @@ mod tests {
             with_blobs - without_blobs,
             6 * L2_TX_INTRINSIC_COMPUTATIONAL_NATIVE_PER_BLOB_VERSIONED_HASH
         );
+    }
+
+    // SYSCOIN: Conditional pubdata consumes withheld capacity before touching
+    // the transaction's computational pool.
+    #[test]
+    fn conditional_intrinsic_reservation_is_withheld_first() {
+        type TestResources = BaseResources<DecreasingNative>;
+        let mut main = TestResources::from_ergs_and_native(
+            Ergs(123),
+            DecreasingNative::from_computational(100),
+        );
+        let mut withheld = TestResources::from_native(DecreasingNative::from_computational(100));
+
+        assert!(try_reserve_conditional_intrinsic_resources(
+            &mut main,
+            &mut withheld,
+            10,
+            30,
+            12,
+        ));
+        assert_eq!(withheld.native().as_u64(), 0);
+        assert_eq!(main.native().as_u64(), 50);
+        assert_eq!(main.ergs(), Ergs(123));
+    }
+
+    // SYSCOIN: A failed conditional branch must leave both resource pools
+    // byte-for-byte unchanged so native fallback is deterministic.
+    #[test]
+    fn conditional_intrinsic_reservation_failure_is_atomic() {
+        type TestResources = BaseResources<DecreasingNative>;
+        let mut main = TestResources::from_ergs_and_native(
+            Ergs(456),
+            DecreasingNative::from_computational(20),
+        );
+        let mut withheld = TestResources::from_native(DecreasingNative::from_computational(10));
+        let original_main = main.clone();
+        let original_withheld = withheld.clone();
+
+        assert!(!try_reserve_conditional_intrinsic_resources(
+            &mut main,
+            &mut withheld,
+            10,
+            30,
+            2,
+        ));
+        assert_eq!(main, original_main);
+        assert_eq!(withheld, original_withheld);
+
+        assert!(!try_reserve_conditional_intrinsic_resources(
+            &mut main,
+            &mut withheld,
+            u64::MAX,
+            0,
+            2,
+        ));
+        assert_eq!(main, original_main);
+        assert_eq!(withheld, original_withheld);
     }
 }

@@ -136,6 +136,40 @@ impl<
             .write(ee_type, resources, address, key, new_value, oracle)
     }
 
+    // SYSCOIN: Match the flat model's bootloader-only fee-ledger path.
+    fn fee_ledger_storage_read(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        oracle: &mut impl IOOracle,
+    ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, SystemError> {
+        self.storage_cache
+            .fee_ledger_read(resources, address, key, oracle)
+    }
+
+    // SYSCOIN: Match the flat model's fail-closed mutation and rebase semantics.
+    fn fee_ledger_storage_write(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        expected_current: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        new_value: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        rebase_evm_original: bool,
+        oracle: &mut impl IOOracle,
+    ) -> Result<(), SystemError> {
+        self.storage_cache.fee_ledger_write(
+            resources,
+            address,
+            key,
+            expected_current,
+            new_value,
+            rebase_evm_original,
+            oracle,
+        )
+    }
+
     fn read_account_properties<
         EEVersion: Maybe<u8>,
         ObservableBytecodeHash: Maybe<<Self::IOTypes as SystemIOTypesConfig>::BytecodeHashValue>,

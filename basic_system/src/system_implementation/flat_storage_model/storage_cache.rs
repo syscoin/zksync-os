@@ -106,6 +106,48 @@ impl<
         Ok(old_value)
     }
 
+    // SYSCOIN: Delegate the bootloader-only fee-ledger path without exposing
+    // it through ordinary EE storage methods.
+    fn fee_ledger_read(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        oracle: &mut impl IOOracle,
+    ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, SystemError> {
+        let key = WarmStorageKey {
+            address: *address,
+            key: *key,
+        };
+        self.0.apply_fee_ledger_read_impl(&key, resources, oracle)
+    }
+
+    // SYSCOIN: Expected-current comparison and EVM-original rebasing are
+    // enforced atomically by the rollback-aware generic cache.
+    fn fee_ledger_write(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        expected_current: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        new_value: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        rebase_evm_original: bool,
+        oracle: &mut impl IOOracle,
+    ) -> Result<(), SystemError> {
+        let key = WarmStorageKey {
+            address: *address,
+            key: *key,
+        };
+        self.0.apply_fee_ledger_write_impl(
+            &key,
+            expected_current,
+            new_value,
+            rebase_evm_original,
+            oracle,
+            resources,
+        )
+    }
+
     fn read_special_account_property<T: storage_models::common_structs::SpecialAccountProperty>(
         &mut self,
         ee_type: ExecutionEnvironmentType,

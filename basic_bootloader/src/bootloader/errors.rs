@@ -100,6 +100,8 @@ pub enum InvalidTransaction {
     BlockPubdataLimitReached,
     /// Transaction makes the block reach the l2->l1 logs limit
     BlockL2ToL1LogsLimitReached,
+    /// SYSCOIN: Transaction would make a Gateway batch forward more than 32 Bitcoin-DA hashes.
+    SyscoinEdgeDaRefsLimitReached,
     /// 7702 transaction has empty authorization list
     AuthListIsEmpty,
     /// 7702 has a null destination address

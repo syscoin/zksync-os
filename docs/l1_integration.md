@@ -99,12 +99,17 @@ And `batch_output_hash` is `keccak256` of the following fields(concatenated):
 - `upgrade_tx_hash`
 - `interop_roots_rolling_hash`
 - `settlement_layer_chain_id`
+- `edge_da_refs_root`
 
 On the ZK metadata path, runtime `ChainConfig` is the source of truth for these chain-level rules and is committed into the public-input preimage via `chain_config_hash`. The EIP-170 deployed-code limit and the derived EIP-3860 initcode-size limit (`2 *` the deployed-code limit) are fixed compile-time constants and are not part of `ChainConfig`. The single-transaction gas cap is `ChainConfig::max_tx_gas_limit` (floored at the EIP-7825 `1 << 24` limit) and is applied unconditionally on both the ZK and Ethereum metadata paths; the previous compile-time `eip-7825` feature gate no longer applies.
 
 This includes almost the same data as block(s) output, with 2 main differences:
 - `l2_logs_tree_root` instead `l2_to_l1_logs_hashes_blake2s_hash`, we'll build tree during batch processing.
-- `da_commitment_scheme` and `da_commitment` instead of `blake2s`. We can generate different pubdata commitment during batch processing. Useful for different DA layers(`keccak256` for calldata, nothing for validiums, chunk + KZG commitments for Ethereum blobs).
+- `da_commitment_scheme` and `da_commitment` instead of `blake2s`. We can generate different pubdata commitments during batch processing: `keccak256` for calldata, zero for validium, or a Keccak commitment to ordered compact Bitcoin-DA Blake2s data IDs.
+
+`edge_da_refs_root` is a separate ordered rolling commitment to the canonical compact-DA relay
+messages emitted by successful, authorized child-chain commit transactions. It lets settlement
+bind the batch to the exact Bitcoin-DA references without changing the generic L2-to-L1 logs root.
 
 For detailed information about the supported DA commitment schemes, their implementations, and use cases, see [Data Availability Commitment Schemes](./da_commitment_schemes.md).
 
@@ -143,7 +148,7 @@ See [transaction processing](bootloader/transaction_processing.md) for more deta
 
 ## Pubdata
 
-Pubdata is the data we should publish with the chain DA, for rollups it should be Ethereum calldata or blobs.
+Pubdata is the data we publish through the chain's DA path; supported rollup modes include Ethereum calldata and compact Syscoin Bitcoin DA.
 Also, in the future, it can be a third-party DA solution such as Celestia, Avail, etc. Or validiums shouldn't post any data at all.
 
 Pubdata includes data needed to restore the full chain state(everything under commitment mentioned in the public input section) and data for messaging.

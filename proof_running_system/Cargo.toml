@@ -47,8 +47,8 @@ state-diffs-pi = []
 # Selects the BPO2 blob-count schedule; default is base-Osaka.
 fusaka-bpo-2 = ["basic_bootloader/fusaka-bpo-2"]
 
-# Features used for production, by both the singleblock_batch and multiblock_batch binaries.
-production = ["fusaka-bpo-2"]
+# SYSCOIN: Proof-running binaries expose the same SLH-DSA hook as forward execution.
+production = ["fusaka-bpo-2", "system_hooks/slh_dsa_precompile"]
 
 # Features used for tests.
 # Note: cycle_marker is intentionally excluded — binaries with marker CSRs

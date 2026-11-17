@@ -527,6 +527,7 @@ dependencies = [
  "modexp",
  "paste",
  "ruint",
+ "sha2",
  "storage_models",
  "strum_macros",
  "u256",

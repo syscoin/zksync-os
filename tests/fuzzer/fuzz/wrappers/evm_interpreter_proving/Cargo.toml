@@ -29,6 +29,7 @@ paste = "1.0.15"
 zksync_os_evm_errors = { version = "0.0.8", default-features =  false }
 
 [features]
+slh_dsa_precompile = [] # SYSCOIN: mirror the fixed 0x101 hook feature in the wrapped crate
 eip-7645 = []
 default = []
 testing = ["zk_ee/testing"]

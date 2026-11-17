@@ -20,7 +20,8 @@ use zk_ee::system::metadata::zk_metadata::ZkMetadata;
 use zk_ee::system::{IOTeardown, Resources};
 
 impl<
-        A: Allocator + Clone + Default,
+        // SYSCOIN: The selected compact generator owns a clone of this guest allocator.
+        A: Allocator + Clone + Default + 'static,
         R: Resources,
         P: StorageAccessPolicy<R, Bytes32> + Default,
         SF: StackFactory<N>,
@@ -114,6 +115,12 @@ where
 
         io.logs_storage
             .apply_to_array_vec(&mut batch_data.logs_storage);
+        // SYSCOIN: extend the multiblock root only with baked-relay hashes validated before each
+        // authorized Gateway commit transaction was accepted.
+        zk_ee::common_structs::logs_storage::apply_syscoin_edge_da_ref_hashes(
+            &mut batch_data.edge_da_refs_root,
+            &block_data.syscoin_compact_edge_da_ref_hashes,
+        );
 
         let upgrade_tx_hash = block_data.upgrade_tx_recorder.finish();
         let (multichain_root, settlement_layer_chain_id) = read_batch_context_inputs(&mut io);
@@ -190,6 +197,9 @@ where
             io.interop_root_storage.iter(),
             settlement_layer_chain_id,
             block_data.current_transaction_number,
+            // SYSCOIN: Carry this block's accepted forwarded openings into the batch-persistent
+            // counter used by the next block's transaction loop.
+            block_data.syscoin_compact_edge_da_ref_count,
         );
 
         Ok(io.oracle)

@@ -54,6 +54,14 @@ impl<T: Sized, A: Allocator> Stack<T, A> for Vec<T, A> {
     {
         self[n..].iter()
     }
+
+    // SYSCOIN: Native relay checks use the same tail-first traversal as proving.
+    fn iter_rev<'a>(&'a self) -> impl Iterator<Item = &'a T> + Clone
+    where
+        T: 'a,
+    {
+        self[..].iter().rev()
+    }
 }
 
 /// This factory is used in forward execution where memory can be allocated

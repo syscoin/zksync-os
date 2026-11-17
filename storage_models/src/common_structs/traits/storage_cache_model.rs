@@ -52,6 +52,30 @@ pub trait StorageCacheModel: Sized + SnapshottableIo {
         // cold_value_oracle_fn: impl FnMut() -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, InternalError>
     ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageKey, SystemError>;
 
+    /// SYSCOIN: Bootloader-only read for the pinned zkSYS fee ledger. It pays
+    /// native storage work without changing EVM warmth.
+    fn fee_ledger_read(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        oracle: &mut impl IOOracle,
+    ) -> Result<<Self::IOTypes as SystemIOTypesConfig>::StorageValue, SystemError>;
+
+    /// SYSCOIN: Bootloader-only compare-and-write for the pinned zkSYS fee
+    /// ledger. It never changes EVM warmth/refunds; `rebase_evm_original`
+    /// establishes the post-precharge EIP-2200 original value.
+    fn fee_ledger_write(
+        &mut self,
+        resources: &mut Self::Resources,
+        address: &<Self::IOTypes as SystemIOTypesConfig>::Address,
+        key: &<Self::IOTypes as SystemIOTypesConfig>::StorageKey,
+        expected_current: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        new_value: &<Self::IOTypes as SystemIOTypesConfig>::StorageValue,
+        rebase_evm_original: bool,
+        oracle: &mut impl IOOracle,
+    ) -> Result<(), SystemError>;
+
     // special access function for account properties. Not all enum options could be supported
     fn read_special_account_property<T: SpecialAccountProperty>(
         &mut self,
