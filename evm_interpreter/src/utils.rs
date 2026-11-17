@@ -21,17 +21,15 @@ pub fn evm_bytecode_hash(bytecode: &[u8]) -> [u8; 32] {
 impl<S: EthereumLikeTypes> Interpreter<'_, S> {
     #[inline]
     pub(crate) fn cast_to_usize(src: &U256, error_to_set: ExitCode) -> Result<usize, ExitCode> {
-        src.try_to_usize().ok_or(error_to_set)
+        // Heap growth and its native charge must follow the proving guest's address width.
+        src.try_to_u32().map(|value| value as usize).ok_or(error_to_set)
     }
 
     /// Casts a 256-bit value to `u64`.
     ///
     /// Copy opcodes charge their length-dependent gas and native cost from
     /// this width-independent value. The charge must happen before the
-    /// narrowing done by [`Self::cast_to_usize`]. A `usize` narrowing accepts
-    /// different lengths on the 64-bit forward host and on the 32-bit proving
-    /// target. A charge after the narrowing therefore makes the two
-    /// executions spend different resources for the same input.
+    /// narrowing to the guest address width done by [`Self::cast_to_usize`].
     #[inline]
     pub(crate) fn cast_to_u64(src: &U256, error_to_set: ExitCode) -> Result<u64, ExitCode> {
         src.try_to_u64().ok_or(error_to_set)

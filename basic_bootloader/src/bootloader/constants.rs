@@ -1,7 +1,8 @@
 use basic_system::cost_constants::{
     blake2s_native_cost, ECRECOVER_NATIVE_COST, KECCAK256_CHUNK_SIZE, KECCAK256_ROUND_NATIVE_COST,
 };
-use basic_system::system_functions::keccak256::keccak256_native_cost_for_rounds_u64;
+use basic_system::system_functions::keccak256::{keccak256_native_cost_for_rounds_u64, keccak256_native_cost_u64};
+use zk_ee::common_structs::logs_storage::L2_TO_L1_LOG_TREE_HEIGHT;
 // SYSCOIN: Gas-tank resource bounds use the same canonical storage-model cost constants as the
 // system mutation path they constrain.
 use basic_system::system_implementation::flat_storage_model::cost_constants::{
@@ -424,14 +425,21 @@ pub const BLOCK_SERIALIZATION_COUNTERS_PUBDATA_BYTES: u64 = 3 * 4;
 pub const BLOCK_INTRINSIC_PUBDATA_BYTES: u64 =
     1 + 32 + 8 + BLOCK_SERIALIZATION_COUNTERS_PUBDATA_BYTES + EIP_2935_INTRINSIC_PUBDATA;
 
-/// Intrinsic per-block native overhead, applied to block-limit enforcement
-/// from block start. Covers fixed pre-tx-loop system work: the EIP-2935
-/// historical block hash write, the direct L2ChainAssetHandler prewarm, and
-/// the rolled-back, non-zero L2AssetTracker notification that admits mandatory
-/// L1-finalization preimages. Conservatively charge each synthetic call as one
-/// cold AssetTracker notification.
-pub const BLOCK_INTRINSIC_NATIVE: u64 =
-    EIP_2935_INTRINSIC_NATIVE + 2 * L1_TX_ASSET_TRACKER_COLD_NOTIFICATION_NATIVE_COST;
+// The proving post-op reads the shared tree height, its dynamic root and the
+// settlement chain ID with local FORMAL_INFINITE resources. A slot can be new.
+const BATCH_CONTEXT_NATIVE_COST: u64 = 3 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
+    + keccak256_native_cost_u64(32);
+
+// Each published log pays for its leaf and one internal hash. Padding the
+// rightmost subtree to the fixed tree height can still need H - 1 hashes.
+const LOG_TREE_FINALIZATION_NATIVE_COST: u64 =
+    (L2_TO_L1_LOG_TREE_HEIGHT as u64 - 1) * keccak256_native_cost_u64(64);
+
+/// Native work reserved before selecting transactions for the block.
+pub const BLOCK_INTRINSIC_NATIVE: u64 = EIP_2935_INTRINSIC_NATIVE
+    + 2 * L1_TX_ASSET_TRACKER_COLD_NOTIFICATION_NATIVE_COST
+    + BATCH_CONTEXT_NATIVE_COST
+    + LOG_TREE_FINALIZATION_NATIVE_COST;
 
 #[cfg(test)]
 mod tests {
@@ -446,6 +454,24 @@ mod tests {
         SYSCOIN_NATIVE_FEE_INTRINSIC_COMPUTATIONAL_NATIVE_COST, WARM_STORAGE_READ_NATIVE_COST,
         WARM_STORAGE_WRITE_EXTRA_NATIVE_COST,
     };
+
+    #[test]
+    fn block_native_reserve_covers_mandatory_v32_work() {
+        use super::*;
+        let max_residual = (1..=1usize << L2_TO_L1_LOG_TREE_HEIGHT)
+            .map(|leaves| {
+                let internal: usize = (1..=L2_TO_L1_LOG_TREE_HEIGHT)
+                    .map(|level| leaves.div_ceil(1usize << level)).sum();
+                internal.saturating_sub(leaves) as u64
+            })
+            .max()
+            .unwrap();
+        assert_eq!(max_residual, L2_TO_L1_LOG_TREE_HEIGHT as u64 - 1);
+        assert_eq!(BLOCK_INTRINSIC_NATIVE,
+            EIP_2935_INTRINSIC_NATIVE + 2 * L1_TX_ASSET_TRACKER_COLD_NOTIFICATION_NATIVE_COST
+            + 3 * (WARM_STORAGE_READ_NATIVE_COST + COLD_NEW_STORAGE_READ_NATIVE_COST)
+            + keccak256_native_cost_u64(32) + max_residual * keccak256_native_cost_u64(64));
+    }
 
     #[test]
     fn l2_authorization_max_rlp_length_matches_field_encoding() {

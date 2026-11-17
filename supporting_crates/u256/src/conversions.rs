@@ -42,6 +42,11 @@ macro_rules! impl_conversions {
             }
 
             #[inline(always)]
+            pub fn try_to_u32(&self) -> Option<u32> {
+                self.try_to_u64().and_then(|value| u32::try_from(value).ok())
+            }
+
+            #[inline(always)]
             pub fn try_to_usize(&self) -> Option<usize> {
                 let limbs = self.as_limbs();
                 if limbs[3] != 0 || limbs[2] != 0 || limbs[1] != 0 {
@@ -79,3 +84,19 @@ macro_rules! impl_conversions {
 }
 
 pub(crate) use impl_conversions;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn u32_conversion_matches_the_guest_address_width() {
+        for (limbs, expected) in [
+            ([0, 0, 0, 0], Some(0)),
+            ([u32::MAX as u64, 0, 0, 0], Some(u32::MAX)),
+            ([1u64 << 32, 0, 0, 0], None),
+            ([0, 1, 0, 0], None),
+        ] {
+            assert_eq!(crate::naive::U256::from_limbs(limbs).try_to_u32(), expected);
+            assert_eq!(crate::risc_v::U256::from_limbs(limbs).try_to_u32(), expected);
+        }
+    }
+}
