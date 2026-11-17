@@ -29,7 +29,7 @@ impl<R: Resources> SystemFunction<R, Keccak256Errors> for Keccak256Impl {
 }
 
 pub const fn keccak256_native_cost_u64(len: usize) -> u64 {
-    // +1 accounts for keccak padding which always adds at least one byte.
+    // SYSCOIN: Keep the v32 post-op reserve aligned with Keccak’s mandatory padding byte.
     let rounds = len.saturating_add(1).div_ceil(KECCAK256_CHUNK_SIZE);
     keccak256_native_cost_for_rounds_u64(rounds)
 }

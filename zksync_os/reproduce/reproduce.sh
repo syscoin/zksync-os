@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ZKSYNC_OS_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$ZKSYNC_OS_DIR")"
 
-# Syscoin reviews both lockfiles. Resolving the host graph again here would
+# SYSCOIN: We review both lockfiles. Resolving the host graph again here would
 # discard its release pins before the reproducible guest build starts.
 for lockfile in "$REPO_ROOT/Cargo.lock" "$ZKSYNC_OS_DIR/Cargo.lock"; do
     if [[ ! -s "$lockfile" ]]; then

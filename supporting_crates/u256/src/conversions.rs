@@ -40,7 +40,7 @@ macro_rules! impl_conversions {
                     Some(limbs[0])
                 }
             }
-
+            // SYSCOIN: Native execution uses the same 32-bit address limit as the proving guest.
             #[inline(always)]
             pub fn try_to_u32(&self) -> Option<u32> {
                 self.try_to_u64()
