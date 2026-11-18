@@ -258,7 +258,9 @@ def main():
         database = databases[0].parent
         validate_advisories(database, review)
         revision = run(["git", "rev-parse", "HEAD"], database).strip()
-        common = ["cargo", "deny", "--format", "json", "--metadata-path", str(metadata_path),
+        # SYSCOIN: cargo-deny also fetches sources using its manifest. Guest CI has
+        # only fetched the standalone guest graph on a clean runner.
+        common = ["cargo", "deny", "--manifest-path", manifest, "--format", "json", "--metadata-path", str(metadata_path),
                   "--config", str(config), "--target", target, "--all-features", "--locked", "--offline"]
         # Source, license and ban errors remain independent of advisory triage.
         run(common + ["check", "bans", "licenses", "sources", "--allow", "unmaintained"])
