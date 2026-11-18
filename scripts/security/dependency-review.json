@@ -13,7 +13,7 @@
       "manifest": "Cargo.toml",
       "target": "x86_64-unknown-linux-gnu",
       "lock_sha256": "8fb60104f0040b570740f7078fe0449a6a5d736a2a74578fa36ad2f89cdd731d",
-      "source_sha256": "64ae6443a28f5fe7d27e8c5a0f795b95e27875061057adbd1345e4c0f6a08d66",
+      "source_sha256": "9a61199136a00a1e4d1f5744bb8057ac425c6cc5c29efd60a57572a9f6c97ac6",
       "graph_sha256": "bb9dcd948be2e782fe969bdda334c0429b01c4f8d597fca9f257985b912c98da",
       "packages": {
         "crypto-bigint": {
@@ -59,7 +59,7 @@
       "manifest": "zksync_os/Cargo.toml",
       "target": "riscv32im-risc0-zkvm-elf",
       "lock_sha256": "d6863d99a9e876ef55b7abf69f520567cab51668a91374c96c3ce5891a140610",
-      "source_sha256": "64ae6443a28f5fe7d27e8c5a0f795b95e27875061057adbd1345e4c0f6a08d66",
+      "source_sha256": "9a61199136a00a1e4d1f5744bb8057ac425c6cc5c29efd60a57572a9f6c97ac6",
       "graph_sha256": "0f9bb52f8a2ff9e5299dde4c6bb908133926441679e726b02f25715e4e5b8c17",
       "packages": {
         "crypto-bigint": {
