@@ -11,14 +11,14 @@ use zk_ee::common_structs::history_counter::NonEmptyHistoryCounter;
 use zk_ee::common_traits::key_like_with_bounds::{KeyLikeWithBounds, TyEq};
 use zk_ee::execution_environment_type::ExecutionEnvironmentType;
 use zk_ee::internal_error;
-use zk_ee::oracle::IOOracle;
 use zk_ee::oracle::basic_queries::InitialStorageSlotQuery;
+use zk_ee::oracle::IOOracle;
 use zk_ee::system::errors::internal::InternalError;
 use zk_ee::{
     memory::stack_trait::StackFactory,
     oracle::simple_oracle_query::SimpleOracleQuery,
     storage_types::StorageAddress,
-    system::{Resources, errors::system::SystemError},
+    system::{errors::system::SystemError, Resources},
     types_config::{EthereumIOTypesConfig, SystemIOTypesConfig},
 };
 
@@ -112,18 +112,18 @@ pub struct GenericPubdataAwarePlainStorage<
 }
 
 impl<
-    K: 'static + KeyLikeWithBounds,
-    V: Default
-        + Clone
-        + Debug
-        + PartialEq
-        + From<<EthereumIOTypesConfig as SystemIOTypesConfig>::StorageValue>,
-    A: Allocator + Clone,
-    SF: StackFactory<M>,
-    const M: usize,
-    R: Resources,
-    P: StorageAccessPolicy<R, V>,
-> GenericPubdataAwarePlainStorage<K, V, A, SF, M, R, P>
+        K: 'static + KeyLikeWithBounds,
+        V: Default
+            + Clone
+            + Debug
+            + PartialEq
+            + From<<EthereumIOTypesConfig as SystemIOTypesConfig>::StorageValue>,
+        A: Allocator + Clone,
+        SF: StackFactory<M>,
+        const M: usize,
+        R: Resources,
+        P: StorageAccessPolicy<R, V>,
+    > GenericPubdataAwarePlainStorage<K, V, A, SF, M, R, P>
 {
     pub fn new_from_parts(allocator: A, resources_policy: P) -> Self {
         Self {
@@ -605,7 +605,7 @@ mod tests {
     use crate::system_implementation::flat_storage_model::storage_cache::NewStorageWithAccountPropertiesUnderHash;
     use crate::system_implementation::system::EthereumLikeStorageAccessCostModel;
     use core::iter::Empty;
-    use evm_interpreter::{ERGS_PER_GAS, gas_constants::COLD_SLOAD_COST};
+    use evm_interpreter::{gas_constants::COLD_SLOAD_COST, ERGS_PER_GAS};
     use std::alloc::Global;
     use storage_models::common_structs::StorageCacheModel;
     use zk_ee::common_structs::WarmStorageKey;
@@ -1093,18 +1093,16 @@ mod tests {
             .unwrap();
         let resources_after_first = resources.clone();
 
-        assert!(
-            storage
-                .apply_fee_ledger_write_impl(
-                    &key(),
-                    &value(40),
-                    &value(30),
-                    true,
-                    &mut oracle,
-                    &mut resources,
-                )
-                .is_err()
-        );
+        assert!(storage
+            .apply_fee_ledger_write_impl(
+                &key(),
+                &value(40),
+                &value(30),
+                true,
+                &mut oracle,
+                &mut resources,
+            )
+            .is_err());
         assert_eq!(resources, resources_after_first);
         assert_eq!(
             *storage.cache.get(&key()).unwrap().current().value(),
@@ -1143,13 +1141,11 @@ mod tests {
             *storage.cache.get(&key()).unwrap().current().value(),
             value(0)
         );
-        assert!(
-            storage
-                .evm_original_override
-                .value()
-                .and_then(Option::as_ref)
-                .is_none()
-        );
+        assert!(storage
+            .evm_original_override
+            .value()
+            .and_then(Option::as_ref)
+            .is_none());
 
         storage.finish_frame_impl(Some(&snapshot)).unwrap();
         assert_eq!(
@@ -1186,18 +1182,16 @@ mod tests {
         storage.clear_state_impl(Box::new(key().address)).unwrap();
         let resources_after_clear = resources.clone();
 
-        assert!(
-            storage
-                .apply_fee_ledger_write_impl(
-                    &key(),
-                    &value(0),
-                    &value(30),
-                    true,
-                    &mut oracle,
-                    &mut resources,
-                )
-                .is_err()
-        );
+        assert!(storage
+            .apply_fee_ledger_write_impl(
+                &key(),
+                &value(0),
+                &value(30),
+                true,
+                &mut oracle,
+                &mut resources,
+            )
+            .is_err());
         assert_eq!(resources, resources_after_clear);
         assert_eq!(
             *storage.cache.get(&key()).unwrap().current().value(),
@@ -1406,18 +1400,16 @@ mod tests {
         let mut storage = storage_with_initial(100);
         let mut oracle = UnusedOracle;
         let mut resources = resources();
-        assert!(
-            storage
-                .apply_fee_ledger_write_impl(
-                    &key(),
-                    &value(99),
-                    &value(40),
-                    true,
-                    &mut oracle,
-                    &mut resources,
-                )
-                .is_err()
-        );
+        assert!(storage
+            .apply_fee_ledger_write_impl(
+                &key(),
+                &value(99),
+                &value(40),
+                true,
+                &mut oracle,
+                &mut resources,
+            )
+            .is_err());
         let item = storage.cache.get(&key()).unwrap();
         assert_eq!(*item.current().value(), value(100));
         assert!(storage.evm_original_override.value().is_none());
