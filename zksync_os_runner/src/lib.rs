@@ -7,6 +7,8 @@ use airbender_host::{ExecutionResult, FlamegraphConfig, Program, Runner as _};
 use riscv_transpiler::ir::{DecodingOptions, FullUnsignedMachineDecoderConfig};
 use std::path::PathBuf;
 
+mod profiling_symbols;
+
 /// Decoder config used by the FRI-aware RISC-V runner.
 struct FullUnsignedMachineWithMopDecoderConfig;
 
@@ -101,12 +103,17 @@ impl Runner {
             )
             .with_cycles(self.cycles);
 
+        // SYSCOIN: Upstream decompresses before rejecting owned DWARF sections.
+        let profiling_symbols = self.flamegraph.as_ref().map(|_| {
+            profiling_symbols::ProfilingSymbols::prepare(&self.dist_dir.join("app.elf"))
+                .expect("invalid or unsupported profiling symbols")
+        });
         if let Some(fg) = self.flamegraph {
             builder = builder.with_flamegraph(FlamegraphConfig {
                 output: fg.output_path,
                 sampling_rate: fg.frequency_recip,
                 inverse: false,
-                elf_path: Some(self.dist_dir.join("app.elf")),
+                elf_path: Some(profiling_symbols.as_ref().unwrap().path().to_path_buf()),
             });
         }
 

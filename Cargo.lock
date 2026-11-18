@@ -9845,7 +9845,9 @@ dependencies = [
  "common_constants",
  "cycle_marker",
  "log",
+ "object",
  "riscv_transpiler",
+ "tempfile",
 ]
 
 [[package]]

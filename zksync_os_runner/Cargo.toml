@@ -15,6 +15,9 @@ common_constants = { workspace = true }
 riscv_transpiler = { workspace = true, features = ["flamegraph"] }
 cycle_marker = { path = "../cycle_marker", optional = true }
 log = { workspace = true }
+# SYSCOIN: Validate symbol metadata before upstream can allocate decompression buffers.
+object = { version = "0.37.3", default-features = false, features = ["read", "std"] }
+tempfile = "3.27.0"
 
 [features]
 cycle_marker = ["dep:cycle_marker", "cycle_marker/use_airbender_host"]

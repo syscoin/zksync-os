@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "reviewed_base_commit": "df6ec95ab3fb7c291b8d99f422b26f0013d5ff07",
+  "host": "x86_64-unknown-linux-gnu",
+  "rustc_commit": "18d13b5332916ffca8eadb9106d54b5b434e9978",
+  "review_notes": {
+    "crypto-bigint": "The OS host API exposes real secret-key signing. The reviewed 0.5.5 Limb::sbb uses widened wrapping subtraction, predating the newer overflowing_sub regression. k256/p256 signing uses custom multiplication/reduction and fixed inversion routines; the reviewed zero-count/division calls process public curve parameters or public recovery data. UintRef and BoxedMontyForm are absent. This is a source- and compiler-bound applicability disposition, NOT a proof of constant-time generated code, a blanket public-input claim, or approval for other consumers/targets.",
+    "ruzstd": "All OS profiling constructors converge on zksync_os_runner. ProfilingSymbols rejects compressed ELF sections by metadata before decoding and gives the upstream profiler only a bounded, private, readonly validated snapshot. Therefore the reachable OS profiling path does not enter the vulnerable decoder, even if the original input path is replaced. The dependency itself remains affected; using it outside this guarded path requires new review.",
+    "quick-xml": "The pinned inferno dependency is used by the OS only to render collected flamegraph lines as SVG; the reviewed OS entrypoint does not accept an XML document for parsing. This narrows the previous global exception to this exact source/graph."
+  },
+  "scopes": {
+    "workspace": {
+      "manifest": "Cargo.toml",
+      "target": "x86_64-unknown-linux-gnu",
+      "lock_sha256": "8fb60104f0040b570740f7078fe0449a6a5d736a2a74578fa36ad2f89cdd731d",
+      "source_sha256": "64ae6443a28f5fe7d27e8c5a0f795b95e27875061057adbd1345e4c0f6a08d66",
+      "graph_sha256": "bb9dcd948be2e782fe969bdda334c0429b01c4f8d597fca9f257985b912c98da",
+      "packages": {
+        "crypto-bigint": {
+          "version": "0.5.5",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
+        },
+        "ruzstd": {
+          "version": "0.8.3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
+        },
+        "quick-xml": {
+          "version": "0.39.4",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+        }
+      },
+      "advisories": {
+        "RUSTSEC-2026-0387": {
+          "package": "crypto-bigint",
+          "sha256": "7c9f3f944105638e613e83e97690035198e453d701e56506ee911e1fbfcb46f3",
+          "rationale": "The OS host API exposes real secret-key signing. The reviewed 0.5.5 Limb::sbb uses widened wrapping subtraction, predating the newer overflowing_sub regression. k256/p256 signing uses custom multiplication/reduction and fixed inversion routines; the reviewed zero-count/division calls process public curve parameters or public recovery data. UintRef and BoxedMontyForm are absent. This is a source- and compiler-bound applicability disposition, NOT a proof of constant-time generated code, a blanket public-input claim, or approval for other consumers/targets."
+        },
+        "RUSTSEC-2026-0344": {
+          "package": "ruzstd",
+          "sha256": "f6552fb10f4fd5771f52e2980303f30d85222f908b0a2bf7d5b86a5d6f6715ad",
+          "rationale": "All OS profiling constructors converge on zksync_os_runner. ProfilingSymbols rejects compressed ELF sections by metadata before decoding and gives the upstream profiler only a bounded, private, readonly validated snapshot. Therefore the reachable OS profiling path does not enter the vulnerable decoder, even if the original input path is replaced. The dependency itself remains affected; using it outside this guarded path requires new review."
+        },
+        "RUSTSEC-2026-0194": {
+          "package": "quick-xml",
+          "sha256": "148a2d313b2c3d855a810740af4a5e73f50fa1fad9104d375fd52045ab630877",
+          "rationale": "The pinned inferno dependency is used by the OS only to render collected flamegraph lines as SVG; the reviewed OS entrypoint does not accept an XML document for parsing. This narrows the previous global exception to this exact source/graph."
+        },
+        "RUSTSEC-2026-0195": {
+          "package": "quick-xml",
+          "sha256": "b2cd28ce625a122e3859117f3e68718bbe6c7f60cdb726f9a596b58c326b5370",
+          "rationale": "The pinned inferno dependency is used by the OS only to render collected flamegraph lines as SVG; the reviewed OS entrypoint does not accept an XML document for parsing. This narrows the previous global exception to this exact source/graph."
+        }
+      }
+    },
+    "guest": {
+      "manifest": "zksync_os/Cargo.toml",
+      "target": "riscv32im-risc0-zkvm-elf",
+      "lock_sha256": "d6863d99a9e876ef55b7abf69f520567cab51668a91374c96c3ce5891a140610",
+      "source_sha256": "64ae6443a28f5fe7d27e8c5a0f795b95e27875061057adbd1345e4c0f6a08d66",
+      "graph_sha256": "0f9bb52f8a2ff9e5299dde4c6bb908133926441679e726b02f25715e4e5b8c17",
+      "packages": {
+        "crypto-bigint": {
+          "version": "0.5.5",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
+        }
+      },
+      "advisories": {
+        "RUSTSEC-2026-0387": {
+          "package": "crypto-bigint",
+          "sha256": "7c9f3f944105638e613e83e97690035198e453d701e56506ee911e1fbfcb46f3",
+          "rationale": "The OS host API exposes real secret-key signing. The reviewed 0.5.5 Limb::sbb uses widened wrapping subtraction, predating the newer overflowing_sub regression. k256/p256 signing uses custom multiplication/reduction and fixed inversion routines; the reviewed zero-count/division calls process public curve parameters or public recovery data. UintRef and BoxedMontyForm are absent. This is a source- and compiler-bound applicability disposition, NOT a proof of constant-time generated code, a blanket public-input claim, or approval for other consumers/targets."
+        }
+      }
+    }
+  },
+  "guest_preservation": {
+    "baseline_commit": "df6ec95ab3fb7c291b8d99f422b26f0013d5ff07",
+    "guest_lock_sha256": "d6863d99a9e876ef55b7abf69f520567cab51668a91374c96c3ce5891a140610",
+    "resolved_graph_sha256": "0f9bb52f8a2ff9e5299dde4c6bb908133926441679e726b02f25715e4e5b8c17",
+    "guest_source_directories_unchanged": [
+      "zksync_os",
+      "proof_running_system",
+      "basic_bootloader",
+      "basic_system",
+      "forward_system",
+      "zk_ee",
+      "evm_interpreter",
+      "supporting_crates",
+      "api",
+      "oracle_provider",
+      "callable_oracles",
+      "storage_models",
+      "system_hooks",
+      "cycle_marker"
+    ],
+    "new_dependency_edges": [
+      "zksync_os_runner -> object 0.37.3",
+      "zksync_os_runner -> tempfile 3.27.0"
+    ],
+    "dependency_version_or_feature_changes": []
+  },
+  "references": {
+    "advisories": [
+      "https://rustsec.org/advisories/RUSTSEC-2026-0387.html",
+      "https://rustsec.org/advisories/RUSTSEC-2026-0344.html"
+    ],
+    "bigint_subtraction_source": "https://github.com/RustCrypto/crypto-bigint/blob/98f29002552211cbd37dd09d354d1514d84158c4/src/limb/sub.rs",
+    "bigint_subtraction_sha256": "2fe52b63f4876beb4d6fb44f2d04ac62231d66b7071097d592c690ceb4944764",
+    "bigint_newer_regression_fix": "https://github.com/RustCrypto/crypto-bigint/pull/1358",
+    "ruzstd_upstream_fix": "https://github.com/KillingSpark/zstd-rs/commit/d3907c960ca4a1aa44cc38340137c5679dd98f5a"
+  }
+}
